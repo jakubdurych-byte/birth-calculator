@@ -1,6 +1,0 @@
-// Add this to your niri config, then reload niri.
-// Confirm the app-id with: niri msg pick-window
-window-rule {
-    match app-id="BirthCalculator"
-    open-floating true
-}
