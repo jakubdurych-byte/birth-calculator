@@ -1,6 +1,8 @@
 import java.awt.*;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
+import java.awt.event.MouseAdapter;
+import java.awt.event.MouseEvent;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -28,10 +30,10 @@ public class BirthCalculator extends JFrame {
         DateTimeFormatter.ISO_LOCAL_DATE;
     private static final DateTimeFormatter TIME_FORMATTER =
         DateTimeFormatter.ofPattern("HH:mm:ss");
-    private static final String UI_FONT = chooseFont(
-        "Inter", "SF Pro Display", "Segoe UI", "Noto Sans", "Arial", Font.SANS_SERIF);
-    private static final String MONO_FONT = chooseFont(
-        "JetBrains Mono", "Cascadia Mono", "Fira Code", "Noto Sans Mono", Font.MONOSPACED);
+    private static final String UI_FONT = chooseFont("Inter", "Ubuntu", "Roboto", "Noto Sans", 
+        "DejaVu Sans", "Segoe UI", "Arial", Font.SANS_SERIF);
+    private static final String MONO_FONT = chooseFont("JetBrains Mono", "Cascadia Code", 
+        "Fira Code", "Noto Sans Mono", Font.MONOSPACED);
     private static final Font FONT_BODY = new Font(UI_FONT, Font.PLAIN, 13);
     private static final Font FONT_BODY_BOLD = new Font(UI_FONT, Font.BOLD, 14);
     private static final Font FONT_BUTTON = new Font(UI_FONT, Font.BOLD, 14);
@@ -116,6 +118,12 @@ public class BirthCalculator extends JFrame {
     private static class GradientButton extends JButton {
         private Color start;
         private Color end;
+        private float hoverProgress = 0.0f; // 0.0 = normal, 1.0 = hovered
+        private Timer hoverTimer;
+        private static final int ANIMATION_DURATION = 150; // ms
+        private static final int ANIMATION_FPS = 60; // frames per second
+        private long animationStartTime;
+        private boolean hovering = false; // true if mouse is currently over the button
 
         GradientButton(String text, Color start, Color end) {
             super(text);
@@ -130,11 +138,53 @@ public class BirthCalculator extends JFrame {
             setCursor(new Cursor(Cursor.HAND_CURSOR));
             setPreferredSize(new Dimension(146, 42));
             setBorder(BorderFactory.createEmptyBorder(9, 20, 9, 20));
+
+            // Initialize timer for hover animation
+            hoverTimer = new Timer(1000 / ANIMATION_FPS, e -> animateHover());
+            hoverTimer.setCoalesce(true); // Only one event per interval
+
+            addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseEntered(MouseEvent e) {
+                    hovering = true;
+                    hoverTimer.start(); // Start the timer, animateHover will set animationStartTime
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    hovering = false;
+                    hoverTimer.start(); // Start the timer, animateHover will set animationStartTime
+                }
+            });
         }
 
         void setColors(Color start, Color end) {
             this.start = start;
             this.end = end;
+            this.hoverProgress = 0.0f; // Reset hover state
+            if (hoverTimer != null && hoverTimer.isRunning()) {
+                hoverTimer.stop();
+            }
+            repaint();
+        }
+
+        private void animateHover() {
+            if (animationStartTime == 0) { // First frame of animation
+                animationStartTime = System.currentTimeMillis();
+            }
+            long currentTime = System.currentTimeMillis();
+            float fraction = (float) (currentTime - animationStartTime) / ANIMATION_DURATION;
+
+            if (hovering) { // Mouse entered, animate towards 1.0
+                hoverProgress = Math.min(1.0f, fraction);
+            } else { // Mouse exited, animate towards 0.0
+                hoverProgress = Math.max(0.0f, 1.0f - fraction);
+            }
+
+            if ((hovering && hoverProgress == 1.0f) || (!hovering && hoverProgress == 0.0f)) {
+                hoverTimer.stop();
+                animationStartTime = 0; // Reset for next animation cycle
+            }
             repaint();
         }
 
@@ -142,32 +192,111 @@ public class BirthCalculator extends JFrame {
         protected void paintComponent(Graphics g) {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
             Color drawStart = start;
             Color drawEnd = end;
+
+            // Interpolate base colors for hover effect
+            Color animatedStart = interpolateColor(start, end, hoverProgress);
+            Color animatedEnd = interpolateColor(end, start, hoverProgress);
+
+            // Apply pressed state if active
             if (getModel().isPressed()) {
-                drawStart = start.darker();
-                drawEnd = end.darker();
-            } else if (getModel().isRollover()) {
-                drawStart = end;
-                drawEnd = start;
+                animatedStart = animatedStart.darker();
+                animatedEnd = animatedEnd.darker();
             }
 
-            GradientPaint gradient = new GradientPaint(0, 0, drawStart, 0, getHeight(), drawEnd);
+            GradientPaint gradient = new GradientPaint(0, 0, animatedStart, 0, getHeight(), animatedEnd);
             g2.setPaint(gradient);
+
+            // Draw shadow
             g2.setColor(new Color(0, 0, 0, 45));
             g2.fillRoundRect(0, 4, getWidth(), getHeight() - 2, 12, 12);
 
+            // Draw main button body
             g2.setPaint(gradient);
             g2.fillRoundRect(0, 0, getWidth(), getHeight() - 4, 12, 12);
 
-            if (getModel().isRollover()) {
-                g2.setColor(new Color(255, 255, 255, 45));
+            // Animate the white border's alpha based on hoverProgress
+            if (hoverProgress > 0.0f) {
+                g2.setColor(new Color(255, 255, 255, (int)(80 * hoverProgress)));
                 g2.drawRoundRect(1, 1, getWidth() - 3, getHeight() - 7, 12, 12);
             }
 
+            // DRAW TEXT LAST: Ensure visibility and precise centering
+            String text = getText();
+            if (text != null && !text.isEmpty()) {
+                g2.setFont(getFont());
+                g2.setColor(Color.WHITE);
+                FontMetrics fm = g2.getFontMetrics();
+                int x = (getWidth() - fm.stringWidth(text)) / 2 + 1; // Slight nudge for balance
+                
+                // Mathematically precise vertical centering for icons and text
+                int y = (getHeight() - 4 + fm.getAscent() - fm.getDescent()) / 2;
+                g2.drawString(text, x, y);
+            }
+
             g2.dispose();
-            super.paintComponent(g);
+        }
+
+        // Helper for color interpolation
+        private Color interpolateColor(Color c1, Color c2, float fraction) {
+            int r = (int) (c1.getRed() + (c2.getRed() - c1.getRed()) * fraction);
+            int g = (int) (c1.getGreen() + (c2.getGreen() - c1.getGreen()) * fraction);
+            int b = (int) (c1.getBlue() + (c2.getBlue() - c1.getBlue()) * fraction);
+            int a = (int) (c1.getAlpha() + (c2.getAlpha() - c1.getAlpha()) * fraction);
+            return new Color(r, g, b, a);
+        }
+    }
+
+    private static class CalendarDayButton extends JButton {
+        private final Theme theme;
+        private boolean isToday;
+        private boolean isWeekend;
+        private boolean isSelected;
+
+        CalendarDayButton(String text, Theme theme) {
+            super(text);
+            this.theme = theme;
+            setFont(FONT_BODY_BOLD);
+            setFocusPainted(false);
+            setBorderPainted(false);
+            setContentAreaFilled(false);
+            setOpaque(false);
+            setCursor(new Cursor(Cursor.HAND_CURSOR));
+            setPreferredSize(new Dimension(42, 36));
+        }
+
+        void setStates(boolean today, boolean weekend, boolean selected) {
+            this.isToday = today;
+            this.isWeekend = weekend;
+            this.isSelected = selected;
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            if (isSelected || isToday) {
+                g2.setPaint(new GradientPaint(0, 0, theme.primary, 0, getHeight(), theme.secondary));
+                g2.fillRoundRect(2, 2, getWidth() - 4, getHeight() - 4, 10, 10);
+                setForeground(Color.WHITE);
+            } else if (getModel().isRollover()) {
+                g2.setColor(new Color(255, 255, 255, 30));
+                g2.fillRoundRect(2, 2, getWidth() - 4, getHeight() - 4, 10, 10);
+                setForeground(theme.textMain);
+            } else {
+                setForeground(isWeekend ? theme.accent : theme.textMain);
+            }
+
+            // Use the same centering logic as GradientButton for consistency
+            FontMetrics fm = g2.getFontMetrics();
+            int x = (getWidth() - fm.stringWidth(getText())) / 2;
+            int y = (getHeight() + fm.getAscent() - fm.getDescent()) / 2;
+            g2.drawString(getText(), x, y);
+            g2.dispose();
         }
     }
 
@@ -406,8 +535,8 @@ public class BirthCalculator extends JFrame {
         setTitle("Kalkulátor Věku");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setType(Window.Type.UTILITY);
-        setPreferredSize(new Dimension(700, 680));
-        setMinimumSize(new Dimension(700, 680));
+        setPreferredSize(new Dimension(920, 750));
+        setMinimumSize(new Dimension(920, 750));
         setResizable(false);
         initializeUI();
         startRealtimeUpdates();
@@ -469,9 +598,9 @@ public class BirthCalculator extends JFrame {
                 g2.setFont(new Font(UI_FONT, Font.BOLD, 16));
                 g2.setColor(Color.WHITE);
                 FontMetrics fm = g2.getFontMetrics();
-                int x = (getWidth() - fm.stringWidth("🎨")) / 2;
-                int y = ((getHeight() - fm.getHeight()) / 2) + fm.getAscent();
-                g2.drawString("🎨", x, y);
+                int x = (getWidth() - fm.stringWidth("🖌")) / 2;
+                int y = ((getHeight() - 4 - fm.getHeight()) / 2) + fm.getAscent();
+                g2.drawString("🖌", x, y);
                 g2.dispose();
             }
         };
@@ -565,7 +694,7 @@ public class BirthCalculator extends JFrame {
         dateConstraints.gridx = 0;
         datePanel.add(dateField, dateConstraints);
 
-        calendarButton = createStyledButton("Kalendář", currentTheme.primary, currentTheme.secondary);
+        calendarButton = createStyledButton("📅 Kalendář", currentTheme.primary, currentTheme.secondary);
         calendarButton.setPreferredSize(new Dimension(124, 42));
         calendarButton.addActionListener(e -> showCalendarDialog());
         dateConstraints.gridx = 1;
@@ -590,17 +719,20 @@ public class BirthCalculator extends JFrame {
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.CENTER, 16, 8));
         buttonPanel.setOpaque(false);
         
-        calculateButton = createIconButton("✓", currentTheme.primary, currentTheme.secondary);
+        calculateButton = createStyledButton("Calculator", currentTheme.primary, currentTheme.secondary);
+        calculateButton.setPreferredSize(new Dimension(170, 48));
         calculateButton.setToolTipText("Vypočítat věk");
         calculateButton.addActionListener(e -> calculateAge());
         buttonPanel.add(calculateButton);
 
-        birthdaysButton = createIconButton("🎂", currentTheme.secondary, currentTheme.primary);
+        birthdaysButton = createStyledButton("Friends BD", currentTheme.secondary, currentTheme.primary);
+        birthdaysButton.setPreferredSize(new Dimension(170, 48));
         birthdaysButton.setToolTipText("Narozeniny přátel");
         birthdaysButton.addActionListener(e -> showBirthdaysDialog());
         buttonPanel.add(birthdaysButton);
         
-        clearButton = createIconButton("✕", currentTheme.accent, currentTheme.accent.brighter());
+        clearButton = createStyledButton("Clear", currentTheme.accent, currentTheme.accent.brighter());
+        clearButton.setPreferredSize(new Dimension(170, 48));
         clearButton.setToolTipText("Vymazat");
         clearButton.addActionListener(e -> clear());
         buttonPanel.add(clearButton);
@@ -671,7 +803,7 @@ public class BirthCalculator extends JFrame {
         
         add(mainPanel);
         pack();
-        setSize(new Dimension(700, 680));
+        setSize(new Dimension(920, 750));
     }
     
     private void applyTheme(int themeIndex) {
@@ -755,6 +887,30 @@ public class BirthCalculator extends JFrame {
                 updateBirthdayDetail();
             }
         }
+        
+        // Update Global UI Defaults for Popups/Menus to match the theme
+        UIManager.put("PopupMenu.background", currentTheme.cardBackground);
+        UIManager.put("PopupMenu.border", BorderFactory.createCompoundBorder(
+            BorderFactory.createLineBorder(currentTheme.primary, 1),
+            BorderFactory.createEmptyBorder(2, 2, 2, 2)));
+        UIManager.put("Menu.background", currentTheme.cardBackground);
+        UIManager.put("Menu.foreground", currentTheme.textMain);
+        UIManager.put("MenuItem.background", currentTheme.cardBackground);
+        UIManager.put("MenuItem.foreground", currentTheme.textMain);
+        UIManager.put("MenuItem.selectionBackground", new Color(currentTheme.primary.getRed(), currentTheme.primary.getGreen(), currentTheme.primary.getBlue(), 180));
+        UIManager.put("MenuItem.selectionForeground", Color.WHITE);
+        UIManager.put("MenuItem.font", FONT_BODY);
+        UIManager.put("MenuItem.border", BorderFactory.createEmptyBorder(10, 15, 10, 15));
+        
+        UIManager.put("ToolTip.background", currentTheme.cardBackground);
+        UIManager.put("ToolTip.foreground", currentTheme.textMain);
+        UIManager.put("ToolTip.border", BorderFactory.createLineBorder(currentTheme.primary, 1));
+        
+        UIManager.put("OptionPane.background", currentTheme.cardBackground);
+        UIManager.put("OptionPane.messageForeground", currentTheme.textMain);
+        
+        // Update existing components if necessary
+        SwingUtilities.updateComponentTreeUI(this);
         
         mainPanel.repaint();
         centerPanel.repaint();
@@ -1167,7 +1323,7 @@ public class BirthCalculator extends JFrame {
             label.setOpaque(true);
             label.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
             label.setFont(FONT_BODY_BOLD);
-            label.setText(value.name);
+            label.setText(value.toString());
 
             if (isSelected) {
                 label.setBackground(currentTheme.secondary);
@@ -1190,7 +1346,7 @@ public class BirthCalculator extends JFrame {
         birthdayScrollPane.setBorder(BorderFactory.createEmptyBorder());
         birthdayScrollPane.setBackground(currentTheme.inputBackground);
         birthdayScrollPane.getViewport().setBackground(currentTheme.inputBackground);
-        birthdayScrollPane.setPreferredSize(new Dimension(320, 300));
+        birthdayScrollPane.setPreferredSize(new Dimension(420, 350));
         birthdayScrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
         birthdayScrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
         birthdayScrollPane.getVerticalScrollBar().setUI(new ModernScrollBarUI(currentTheme));
@@ -1480,12 +1636,27 @@ public class BirthCalculator extends JFrame {
         dialog.getContentPane().setBackground(currentTheme.backgroundTop);
         dialog.setLayout(new BorderLayout(12, 12));
 
-        JPanel contentPanel = new JPanel(new BorderLayout(12, 12));
-        contentPanel.setOpaque(true);
-        contentPanel.setBackground(currentTheme.backgroundTop);
+        JPanel contentPanel = new JPanel(new BorderLayout(12, 12)) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                Graphics2D g2 = (Graphics2D) g;
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                GradientPaint gradient = new GradientPaint(0, 0, currentTheme.backgroundTop,
+                    getWidth(), getHeight(), currentTheme.backgroundBottom);
+                g2.setPaint(gradient);
+                g2.fillRect(0, 0, getWidth(), getHeight());
+
+                g2.setColor(currentTheme.glow);
+                int[] bandX = {0, getWidth(), getWidth(), 0};
+                int[] bandY = {40, 0, 30, 80};
+                g2.fillPolygon(bandX, bandY, 4);
+            }
+        };
+        contentPanel.setOpaque(false);
         contentPanel.setBorder(BorderFactory.createEmptyBorder(16, 16, 16, 16));
 
-        JPanel headerPanel = new JPanel(new BorderLayout(0, 4));
+        JPanel headerPanel = new JPanel(new BorderLayout(0, 6));
         headerPanel.setOpaque(false);
         JLabel dialogTitleLabel = new JLabel(dialogTitle);
         dialogTitleLabel.setFont(FONT_TITLE);
@@ -1496,13 +1667,22 @@ public class BirthCalculator extends JFrame {
         headerPanel.add(dialogTitleLabel, BorderLayout.NORTH);
         headerPanel.add(dialogHintLabel, BorderLayout.SOUTH);
 
-        JPanel controlsPanel = new JPanel(new GridBagLayout());
+        JPanel controlsPanel = new JPanel(new GridBagLayout()) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                // Subtle separator or background for controls if needed
+            }
+        };
         controlsPanel.setOpaque(false);
+        controlsPanel.setBorder(BorderFactory.createEmptyBorder(10, 0, 10, 0));
         GridBagConstraints controls = new GridBagConstraints();
-        controls.insets = new Insets(0, 5, 0, 5);
+        controls.insets = new Insets(0, 4, 0, 4);
 
-        JButton previousMonthButton = createSmallCalendarButton("<");
-        JButton nextMonthButton = createSmallCalendarButton(">");
+        GradientButton previousMonthButton = new GradientButton("<", currentTheme.primary, currentTheme.secondary);
+        previousMonthButton.setPreferredSize(new Dimension(40, 36));
+        GradientButton nextMonthButton = new GradientButton(">", currentTheme.primary, currentTheme.secondary);
+        nextMonthButton.setPreferredSize(new Dimension(40, 36));
+        
         JComboBox<String> monthCombo = new JComboBox<>(new String[] {
             "Leden", "Únor", "Březen", "Duben", "Květen", "Červen",
             "Červenec", "Srpen", "Září", "Říjen", "Listopad", "Prosinec"
@@ -1510,10 +1690,21 @@ public class BirthCalculator extends JFrame {
         monthCombo.setFont(FONT_BODY_BOLD);
         monthCombo.setBackground(currentTheme.cardBackground);
         monthCombo.setForeground(currentTheme.textMain);
+        monthCombo.setBorder(BorderFactory.createLineBorder(currentTheme.primary.darker(), 1));
+        ((JLabel)monthCombo.getRenderer()).setHorizontalAlignment(SwingConstants.CENTER);
         monthCombo.setSelectedIndex(selectedDate.getMonthValue() - 1);
 
         JSpinner yearSpinner = new JSpinner(new SpinnerNumberModel(
             selectedDate.getYear(), 1900, LocalDate.now().getYear(), 1));
+        yearSpinner.setBorder(BorderFactory.createLineBorder(currentTheme.primary.darker(), 1));
+        JComponent editor = yearSpinner.getEditor();
+        if (editor instanceof JSpinner.DefaultEditor) {
+            JTextField tf = ((JSpinner.DefaultEditor)editor).getTextField();
+            tf.setBackground(currentTheme.cardBackground);
+            tf.setForeground(currentTheme.textMain);
+            tf.setCaretColor(currentTheme.primary);
+            tf.setHorizontalAlignment(JTextField.CENTER);
+        }
         yearSpinner.setFont(FONT_BODY_BOLD);
         yearSpinner.setPreferredSize(new Dimension(88, 32));
 
@@ -1529,7 +1720,7 @@ public class BirthCalculator extends JFrame {
         JPanel daysPanel = new JPanel(new GridLayout(0, 7, 6, 6));
         daysPanel.setOpaque(false);
 
-        Runnable refreshCalendar = () -> updateCalendarDays(daysPanel, monthCombo, yearSpinner, dialog, targetField, afterPick);
+        Runnable refreshCalendar = () -> updateCalendarDays(daysPanel, monthCombo, yearSpinner, dialog, targetField, selectedDate, afterPick);
         monthCombo.addActionListener(e -> refreshCalendar.run());
         yearSpinner.addChangeListener(e -> refreshCalendar.run());
         previousMonthButton.addActionListener(e -> moveCalendarMonth(monthCombo, yearSpinner, -1));
@@ -1546,7 +1737,7 @@ public class BirthCalculator extends JFrame {
 
         refreshCalendar.run();
         dialog.pack();
-        dialog.setMinimumSize(new Dimension(480, 430));
+        dialog.setMinimumSize(new Dimension(520, 500));
         dialog.setLocationRelativeTo(this);
         dialog.setVisible(true);
     }
@@ -1584,16 +1775,17 @@ public class BirthCalculator extends JFrame {
             JSpinner yearSpinner,
             JDialog dialog,
             JTextField targetField,
+            LocalDate selectedInField,
             Runnable afterPick) {
         daysPanel.removeAll();
         String[] dayNames = {"Po", "Út", "St", "Čt", "Pá", "So", "Ne"};
         for (String dayName : dayNames) {
-            JLabel label = new JLabel(dayName, SwingConstants.CENTER);
+            JLabel label = new JLabel(dayName, JLabel.CENTER);
             label.setFont(FONT_BODY_BOLD);
             label.setForeground(currentTheme.textMuted);
             label.setOpaque(true);
-            label.setBackground(currentTheme.cardBackground);
-            label.setBorder(BorderFactory.createEmptyBorder(6, 0, 6, 0));
+            label.setBackground(new Color(0,0,0,0));
+            label.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
             daysPanel.add(label);
         }
 
@@ -1609,20 +1801,16 @@ public class BirthCalculator extends JFrame {
 
         for (int day = 1; day <= shownMonth.lengthOfMonth(); day++) {
             LocalDate date = shownMonth.atDay(day);
-            JButton dayButton = createSmallCalendarButton(String.valueOf(day));
+            CalendarDayButton dayButton = createSmallCalendarButton(String.valueOf(day));
             dayButton.setEnabled(!date.isAfter(today));
+            
             boolean isToday = date.equals(today);
             boolean isWeekend = date.getDayOfWeek().getValue() >= 6;
-            if (isToday) {
-                dayButton.setBackground(currentTheme.secondary);
-                dayButton.setForeground(Color.WHITE);
-            } else if (isWeekend) {
-                dayButton.setBackground(currentTheme.inputBackground);
-                dayButton.setForeground(currentTheme.accent);
-            } else {
-                dayButton.setBackground(currentTheme.cardBackground);
-                dayButton.setForeground(currentTheme.textMain);
-            }
+            boolean isSelected = date.equals(selectedInField);
+            
+            dayButton.setStates(isToday, isWeekend, isSelected);
+            dayButton.setToolTipText("Znamení: " + getZodiacSign(date));
+            
             dayButton.addActionListener(e -> {
                 targetField.setText(date.format(DATE_FORMATTER));
                 dialog.dispose();
@@ -1637,21 +1825,26 @@ public class BirthCalculator extends JFrame {
         daysPanel.repaint();
     }
 
-    private JButton createSmallCalendarButton(String text) {
-        JButton button = new JButton(text);
-        button.setFont(FONT_BODY_BOLD);
-        button.setFocusPainted(false);
-        button.setBorderPainted(false);
-        button.setContentAreaFilled(true);
-        button.setOpaque(true);
-        button.setCursor(new Cursor(Cursor.HAND_CURSOR));
-        button.setForeground(currentTheme.textMain);
-        button.setBackground(currentTheme.cardBackground);
-        button.setPreferredSize(new Dimension(42, 36));
-        button.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(currentTheme.primary.darker(), 1),
-            BorderFactory.createEmptyBorder(8, 10, 8, 10)));
-        return button;
+    private CalendarDayButton createSmallCalendarButton(String text) {
+        return new CalendarDayButton(text, currentTheme);
+    }
+
+    private String getZodiacSign(LocalDate date) {
+        int m = date.getMonthValue();
+        int d = date.getDayOfMonth();
+        if (m == 1)  return d < 20 ? "♑ Kozoroh (Capricorn)" : "♒ Vodnář (Aquarius)";
+        if (m == 2)  return d < 19 ? "♒ Vodnář (Aquarius)" : "♓ Ryby (Pisces)";
+        if (m == 3)  return d < 21 ? "♓ Ryby (Pisces)" : "♈ Beran (Aries)";
+        if (m == 4)  return d < 20 ? "♈ Beran (Aries)" : "♉ Býk (Taurus)";
+        if (m == 5)  return d < 21 ? "♉ Býk (Taurus)" : "♊ Blíženci (Gemini)";
+        if (m == 6)  return d < 21 ? "♊ Blíženci (Gemini)" : "♋ Rak (Cancer)";
+        if (m == 7)  return d < 23 ? "♋ Rak (Cancer)" : "♌ Lev (Leo)";
+        if (m == 8)  return d < 23 ? "♌ Lev (Leo)" : "♍ Panna (Virgo)";
+        if (m == 9)  return d < 23 ? "♍ Panna (Virgo)" : "♎ Váhy (Libra)";
+        if (m == 10) return d < 23 ? "♎ Váhy (Libra)" : "♏ Štír (Scorpio)";
+        if (m == 11) return d < 22 ? "♏ Štír (Scorpio)" : "♐ Střelec (Sagittarius)";
+        if (m == 12) return d < 22 ? "♐ Střelec (Sagittarius)" : "♑ Kozoroh (Capricorn)";
+        return "";
     }
 
     private LocalDate parseDateSilently(String dateStr) {
@@ -1765,10 +1958,10 @@ public class BirthCalculator extends JFrame {
             bodyStyle(),
             gradientFallback(),
             age.getYears(), age.getMonths(), age.getDays(),
-            metricRow("Datum narození", birthDate.format(DATE_FORMATTER),
-                "Dnešní datum", today.format(DATE_FORMATTER)),
-            metricRow("Měsíců celkem", String.format("%,d", months),
-                "Přibližně týdnů", String.format("%,.1f", days / 7.0)),
+            metricRow("Datum narození", birthDate.format(DATE_FORMATTER), 
+                "Znamení zvěrokruhu", getZodiacSign(birthDate)),
+            metricRow("Dnešní datum", today.format(DATE_FORMATTER), 
+                "Měsíců celkem", String.format("%,d", months)),
             hex(currentTheme.textMain),
             metricRow("Příští narozeniny", nextBirthday.format(DATE_FORMATTER), "Odpočet", birthdayText),
             hex(currentTheme.textMain),
@@ -1888,6 +2081,9 @@ public class BirthCalculator extends JFrame {
         UIManager.put("TextArea.font", FONT_MONO);
         UIManager.put("TextField.font", FONT_INPUT);
         UIManager.put("ToolTip.font", FONT_BODY);
+        UIManager.put("ToolTip.background", theme.cardBackground);
+        UIManager.put("ToolTip.foreground", theme.textMain);
+        UIManager.put("ToolTip.border", BorderFactory.createLineBorder(theme.primary, 1));
         UIManager.put("Panel.background", theme.backgroundTop);
         UIManager.put("OptionPane.background", theme.cardBackground);
         UIManager.put("OptionPane.messageForeground", theme.textMain);
