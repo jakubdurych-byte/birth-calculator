@@ -640,7 +640,7 @@ public class BirthCalculator extends JFrame {
         MetricCard(String title, String initialValue) {
             setLayout(new BorderLayout(2, 2));
             setOpaque(false);
-            setBorder(BorderFactory.createEmptyBorder(10, 12, 18, 12));
+            setBorder(BorderFactory.createEmptyBorder(8, 12, 10, 12));
 
             label = new JLabel(title);
             label.setFont(new Font(UI_FONT, Font.PLAIN, 11));
@@ -714,7 +714,7 @@ public class BirthCalculator extends JFrame {
         HeaderCard() {
             setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
             setOpaque(false);
-            setBorder(BorderFactory.createEmptyBorder(14, 18, 22, 18));
+            setBorder(BorderFactory.createEmptyBorder(10, 16, 10, 16));
 
             titleLabel = new JLabel("VĚK DNES");
             titleLabel.setFont(new Font(UI_FONT, Font.BOLD, 11));
@@ -1171,8 +1171,8 @@ public class BirthCalculator extends JFrame {
         setTitle("Kalkulátor Věku");
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setType(Window.Type.UTILITY);
-        setPreferredSize(new Dimension(920, 750));
-        setMinimumSize(new Dimension(920, 750));
+        setPreferredSize(new Dimension(1100, 850));
+        setMinimumSize(new Dimension(1100, 850));
         setResizable(false);
         initializeUI();
         startRealtimeUpdates();
@@ -1218,7 +1218,7 @@ public class BirthCalculator extends JFrame {
         getContentPane().setBackground(currentTheme.backgroundTop);
 
         // Hlavní panel s BorderLayout
-        mainPanel = new JPanel(new BorderLayout(14, 14)) {
+        mainPanel = new JPanel(new BorderLayout(10, 10)) {
             @Override
             protected void paintComponent(Graphics g) {
                 super.paintComponent(g);
@@ -1227,13 +1227,13 @@ public class BirthCalculator extends JFrame {
         };
         mainPanel.setOpaque(true);
         mainPanel.setBackground(currentTheme.backgroundTop);
-        mainPanel.setBorder(BorderFactory.createEmptyBorder(16, 18, 18, 18));
+        mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 16, 10, 16));
 
-        JPanel topPanel = new JPanel(new BorderLayout(0, 10));
+        JPanel topPanel = new JPanel(new BorderLayout(0, 6));
         topPanel.setOpaque(false);
         
         // ===== TOP THEME SELECTOR - ONE ICON WITH DROPDOWN =====
-        JPanel themeSelectorPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 10));
+        JPanel themeSelectorPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT, 6, 6));
         themeSelectorPanel.setOpaque(false);
         
         JButton themeDropdownBtn = new JButton() {
@@ -1291,7 +1291,7 @@ public class BirthCalculator extends JFrame {
         };
         titlePanel.setLayout(new BorderLayout(0, 6));
         titlePanel.setOpaque(false);
-        titlePanel.setBorder(BorderFactory.createEmptyBorder(18, 22, 20, 22));
+        titlePanel.setBorder(BorderFactory.createEmptyBorder(10, 20, 10, 20));
 
         titleLabel = new JLabel("Kalkulátor věku");
         titleLabel.setFont(FONT_TITLE);
@@ -1309,7 +1309,7 @@ public class BirthCalculator extends JFrame {
         mainPanel.add(topPanel, BorderLayout.NORTH);
         
         // ===== STŘEDNÍ PANEL (Vstup + Tlačítka) =====
-        inputPanel = new JPanel(new BorderLayout(10, 10));
+        inputPanel = new JPanel(new BorderLayout(8, 8));
         inputPanel.setOpaque(false);
         
         // Instrukce
@@ -1529,7 +1529,7 @@ public class BirthCalculator extends JFrame {
         setEmptyResults();
         
         // ===== KOMBINACE VŠECH PANELŮ =====
-        centerPanel = new JPanel(new BorderLayout(15, 15));
+        centerPanel = new JPanel(new BorderLayout(8, 8));
         centerPanel.setOpaque(false);
         centerPanel.add(inputPanel, BorderLayout.NORTH);
         centerPanel.add(resultsPanel, BorderLayout.CENTER);
@@ -1546,7 +1546,7 @@ public class BirthCalculator extends JFrame {
         
         add(mainPanel);
         pack();
-        setSize(new Dimension(1100, 920));
+        setSize(new Dimension(1100, 850));
     }
     
     private class ThemeFadeGlassPane extends JComponent {
@@ -1982,7 +1982,7 @@ public class BirthCalculator extends JFrame {
         gbc.gridx = 0;
         gbc.gridwidth = 4;
         gbc.weightx = 1.0;
-        gbc.insets = new Insets(15, 4, 4, 4); // Add spacing above the label
+        gbc.insets = new Insets(8, 4, 4, 4); // Add spacing above the label
         gbc.fill = GridBagConstraints.HORIZONTAL;
         liveTimeLabel = new JLabel("Živě podle systémového času: --:--:--");
         liveTimeLabel.setFont(new Font(UI_FONT, Font.BOLD, 13));
@@ -2910,7 +2910,7 @@ public class BirthCalculator extends JFrame {
     }
 
     private void updateResultsPanelBorder() {
-        resultsPanel.setBorder(BorderFactory.createEmptyBorder(18, 18, 18, 18));
+        resultsPanel.setBorder(BorderFactory.createEmptyBorder(12, 16, 12, 16));
     }
 
     private void showCalendarDialog() {
@@ -3403,6 +3403,10 @@ public class BirthCalculator extends JFrame {
                 }
             });
             masterTimer.start();
+        } else {
+            if (resultsContentPanel != null) {
+                resultsContentPanel.repaint();
+            }
         }
     }
 
