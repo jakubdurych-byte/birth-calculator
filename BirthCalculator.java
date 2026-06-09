@@ -1,8 +1,11 @@
 import java.awt.*;
+import java.awt.event.ActionEvent;
+import java.awt.event.ActionListener;
 import java.awt.event.FocusAdapter;
 import java.awt.event.FocusEvent;
 import java.awt.event.MouseAdapter;
 import java.awt.event.MouseEvent;
+import java.awt.image.BufferedImage;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -14,7 +17,9 @@ import java.time.format.ResolverStyle;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.Base64;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
+import java.util.Map;
 import java.util.prefs.Preferences;
 import javax.swing.*;
 import javax.swing.plaf.basic.BasicScrollBarUI;
@@ -42,10 +47,22 @@ public class BirthCalculator extends JFrame {
     private static final Font FONT_MONO = new Font(MONO_FONT, Font.PLAIN, 13);
 
     private JTextField dateField;
-    private JEditorPane resultsArea;
-    private JScrollPane resultsScrollPane;
+    private JPanel resultsContentPanel;
+    private CardLayout resultsLayout;
+    private HeaderCard headerCard;
+    private MetricCard cardBirthDate;
+    private MetricCard cardZodiac;
+    private MetricCard cardTodayDate;
+    private MetricCard cardMonthsTotal;
+    private MetricCard cardNextBirthday;
+    private MetricCard cardCountdown;
+    private MetricCard cardDaysTotal;
+    private MetricCard cardHoursTotal;
+    private MetricCard cardMinutesTotal;
+    private MetricCard cardSecondsTotal;
+    private JLabel liveTimeLabel;
     private JPanel themePanel;
-    private JComboBox<String> historyCombo;
+    private JButton historyButton;
     private JLabel titleLabel;
     private JLabel subtitleLabel;
     private JLabel instructionLabel;
@@ -62,6 +79,8 @@ public class BirthCalculator extends JFrame {
     private GradientButton removeHistoryButton;
     private Timer realtimeTimer;
     private Theme currentTheme;
+    private int globalMouseX = -1;
+    private int globalMouseY = -1;
     private LocalDate lastBirthDate;
     private boolean updatingHistory;
     private final Preferences preferences;
@@ -79,11 +98,39 @@ public class BirthCalculator extends JFrame {
     private JPanel birthdayCard;
     private CardLayout cardsLayout;
     private BirthdayEntry selectedBirthdayForDetail;
+
+    private static class Star {
+        float x, y;
+        float size;
+        float speed;
+        float phase;
+        float fallSpeed;
+
+        Star(int width, int height) {
+            x = (float) (Math.random() * width);
+            y = (float) (Math.random() * height);
+            size = (float) (Math.random() * 3.5 + 1.5); // Larger stars
+            speed = (float) (Math.random() * 0.003 + 0.001);
+            phase = (float) (Math.random() * Math.PI * 2);
+            fallSpeed = (float) (Math.random() * 0.3 + 0.05); // Very slow drift downwards
+        }
+        
+        void update(int width, int height) {
+            y += fallSpeed;
+            if (y > height) {
+                y = -size;
+                x = (float) (Math.random() * width);
+            }
+        }
+    }
+    private Star[] ambientStars;
+    private int lastStarWidth = -1;
+    private int lastStarHeight = -1;
+    
     private JPanel detailPanel;
-    private JLabel detailNameLabel;
-    private JLabel detailBirthdateLabel;
-    private JLabel detailAgeLabel;
-    private JLabel detailCountdownLabel;
+    private HeaderCard friendHeaderCard;
+    private MetricCard friendNextBirthdayCard;
+    private MetricCard friendCountdownCard;
 
     private static class Theme {
         final String name;
@@ -115,7 +162,7 @@ public class BirthCalculator extends JFrame {
         }
     }
 
-    private static class GradientButton extends JButton {
+    private class GradientButton extends JButton {
         private Color start;
         private Color end;
         private float hoverProgress = 0.0f; // 0.0 = normal, 1.0 = hovered
@@ -194,47 +241,104 @@ public class BirthCalculator extends JFrame {
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
             g2.setRenderingHint(RenderingHints.KEY_TEXT_ANTIALIASING, RenderingHints.VALUE_TEXT_ANTIALIAS_ON);
 
-            Color drawStart = start;
-            Color drawEnd = end;
+            int panelW = getWidth();
+            int panelH = getHeight();
+            int w = panelW - 12;
+            int h = panelH - 12;
 
-            // Interpolate base colors for hover effect
-            Color animatedStart = interpolateColor(start, end, hoverProgress);
-            Color animatedEnd = interpolateColor(end, start, hoverProgress);
+            float scale = 1.0f + (hoverProgress * 0.04f);
+            g2.translate(panelW / 2.0, panelH / 2.0);
+            g2.scale(scale, scale);
+            g2.translate(-w / 2.0, -h / 2.0);
 
-            // Apply pressed state if active
-            if (getModel().isPressed()) {
-                animatedStart = animatedStart.darker();
-                animatedEnd = animatedEnd.darker();
-            }
-
-            GradientPaint gradient = new GradientPaint(0, 0, animatedStart, 0, getHeight(), animatedEnd);
-            g2.setPaint(gradient);
-
-            // Draw shadow
-            g2.setColor(new Color(0, 0, 0, 45));
-            g2.fillRoundRect(0, 4, getWidth(), getHeight() - 2, 12, 12);
-
-            // Draw main button body
-            g2.setPaint(gradient);
-            g2.fillRoundRect(0, 0, getWidth(), getHeight() - 4, 12, 12);
-
-            // Animate the white border's alpha based on hoverProgress
-            if (hoverProgress > 0.0f) {
-                g2.setColor(new Color(255, 255, 255, (int)(80 * hoverProgress)));
-                g2.drawRoundRect(1, 1, getWidth() - 3, getHeight() - 7, 12, 12);
-            }
-
-            // DRAW TEXT LAST: Ensure visibility and precise centering
-            String text = getText();
-            if (text != null && !text.isEmpty()) {
-                g2.setFont(getFont());
-                g2.setColor(Color.WHITE);
-                FontMetrics fm = g2.getFontMetrics();
-                int x = (getWidth() - fm.stringWidth(text)) / 2 + 1; // Slight nudge for balance
+            if (currentTheme != null && currentTheme.name.startsWith("Test")) {
+                // Draw Liquid Glass Button
+                boolean isDark = currentTheme.backgroundTop.getRed() < 128;
                 
-                // Mathematically precise vertical centering for icons and text
-                int y = (getHeight() - 4 + fm.getAscent() - fm.getDescent()) / 2;
-                g2.drawString(text, x, y);
+                // Shadow
+                g2.setColor(new Color(0, 0, 0, 30));
+                g2.fillRoundRect(0, 4, w, h - 4, h, h);
+                g2.setColor(new Color(0, 0, 0, 15));
+                g2.fillRoundRect(0, 8, w, h - 4, h, h);
+
+                // Base frosted color + hover brightness
+                int baseAlpha = isDark ? 30 : 140; // Increased base alpha slightly to show tint
+                int hoverAlpha = (int)(hoverProgress * (isDark ? 40 : 60));
+                if (getModel().isPressed()) hoverAlpha -= 10;
+                g2.setColor(new Color(start.getRed(), start.getGreen(), start.getBlue(), Math.max(0, baseAlpha + hoverAlpha)));
+                g2.fillRoundRect(0, 0, w, h - 4, h, h);
+
+                // Top sheen
+                int sheenAlpha = isDark ? 60 : 200;
+                sheenAlpha += (int)(hoverProgress * 40);
+                GradientPaint sheen = new GradientPaint(
+                    0, 0, new Color(255, 255, 255, Math.min(255, sheenAlpha)),
+                    0, (h - 4) / 2, new Color(255, 255, 255, 0)
+                );
+                g2.setPaint(sheen);
+                g2.fillRoundRect(0, 0, w, h - 4, h, h);
+                
+                // Crisp border + hover brightness
+                int borderAlpha = isDark ? 40 : 180;
+                borderAlpha += (int)(hoverProgress * 60);
+                g2.setColor(new Color(255, 255, 255, Math.min(255, borderAlpha)));
+                g2.drawRoundRect(0, 0, w - 1, h - 5, h, h);
+
+            } else {
+                Color drawStart = start;
+                Color drawEnd = end;
+
+                // Interpolate base colors for hover effect
+                Color animatedStart = interpolateColor(start, end, hoverProgress);
+                Color animatedEnd = interpolateColor(end, start, hoverProgress);
+
+                // Apply pressed state if active
+                if (getModel().isPressed()) {
+                    animatedStart = animatedStart.darker();
+                    animatedEnd = animatedEnd.darker();
+                }
+
+                GradientPaint gradient = new GradientPaint(0, 0, animatedStart, 0, h, animatedEnd);
+                g2.setPaint(gradient);
+
+                // Draw shadow
+                g2.setColor(new Color(0, 0, 0, 45));
+                g2.fillRoundRect(0, 4, w, h - 2, h, h);
+
+                // Draw main button body
+                g2.setPaint(gradient);
+                g2.fillRoundRect(0, 0, w, h - 4, h, h);
+
+                // Animate the white border's alpha based on hoverProgress
+                if (hoverProgress > 0.0f) {
+                    g2.setColor(new Color(255, 255, 255, (int)(80 * hoverProgress)));
+                    g2.drawRoundRect(1, 1, w - 3, h - 7, h, h);
+                }
+            }
+
+            // DRAW TEXT AND ICON: Ensure visibility and precise centering
+            String text = getText();
+            Icon icon = getIcon();
+            g2.setFont(getFont());
+            g2.setColor(Color.WHITE);
+            FontMetrics fm = g2.getFontMetrics();
+            
+            int textWidth = (text != null && !text.isEmpty()) ? fm.stringWidth(text) : 0;
+            int iconWidth = (icon != null) ? icon.getIconWidth() : 0;
+            int gap = (textWidth > 0 && iconWidth > 0) ? 8 : 0;
+            int totalWidth = iconWidth + gap + textWidth;
+            
+            int startX = (w - totalWidth) / 2;
+            
+            if (icon != null) {
+                int iconY = (h - 4 - icon.getIconHeight()) / 2;
+                icon.paintIcon(this, g2, startX, iconY);
+            }
+            
+            if (text != null && !text.isEmpty()) {
+                int textX = startX + iconWidth + gap;
+                int textY = (h - 4 + fm.getAscent() - fm.getDescent()) / 2;
+                g2.drawString(text, textX, textY);
             }
 
             g2.dispose();
@@ -279,32 +383,92 @@ public class BirthCalculator extends JFrame {
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
 
-            if (isSelected || isToday) {
-                g2.setPaint(new GradientPaint(0, 0, theme.primary, 0, getHeight(), theme.secondary));
-                g2.fillRoundRect(2, 2, getWidth() - 4, getHeight() - 4, 10, 10);
-                setForeground(Color.WHITE);
+            int size = Math.min(getWidth(), getHeight()) - 4;
+            int xOffset = (getWidth() - size) / 2;
+            int yOffset = (getHeight() - size) / 2;
+            
+            Color textColor = theme.textMain;
+
+            if (isSelected) {
+                // Subtle glowing ring instead of a heavy solid block
+                g2.setColor(new Color(theme.primary.getRed(), theme.primary.getGreen(), theme.primary.getBlue(), 40));
+                g2.fillOval(xOffset, yOffset, size, size);
+                
+                g2.setStroke(new BasicStroke(1.5f));
+                g2.setColor(theme.primary.brighter());
+                g2.drawOval(xOffset, yOffset, size, size);
+                
+                textColor = Color.WHITE;
+            } else if (isToday) {
+                // Just a very faint border for 'today'
+                g2.setColor(new Color(theme.secondary.getRed(), theme.secondary.getGreen(), theme.secondary.getBlue(), 20));
+                g2.fillOval(xOffset, yOffset, size, size);
+                
+                g2.setStroke(new BasicStroke(1.0f));
+                g2.setColor(new Color(theme.secondary.getRed(), theme.secondary.getGreen(), theme.secondary.getBlue(), 120));
+                g2.drawOval(xOffset, yOffset, size, size);
+                
+                textColor = theme.secondary.brighter();
             } else if (getModel().isRollover()) {
-                g2.setColor(new Color(255, 255, 255, 30));
-                g2.fillRoundRect(2, 2, getWidth() - 4, getHeight() - 4, 10, 10);
-                setForeground(theme.textMain);
+                g2.setColor(new Color(255, 255, 255, 15));
+                g2.fillOval(xOffset, yOffset, size, size);
+                textColor = Color.WHITE;
             } else {
-                setForeground(isWeekend ? theme.accent : theme.textMain);
+                textColor = isWeekend ? theme.accent : new Color(theme.textMuted.getRed(), theme.textMuted.getGreen(), theme.textMuted.getBlue(), 160);
             }
 
-            // Use the same centering logic as GradientButton for consistency
+            if (!isEnabled()) {
+                textColor = new Color(theme.textMuted.getRed(), theme.textMuted.getGreen(), theme.textMuted.getBlue(), 50);
+            }
+
             FontMetrics fm = g2.getFontMetrics();
-            int x = (getWidth() - fm.stringWidth(getText())) / 2;
-            int y = (getHeight() + fm.getAscent() - fm.getDescent()) / 2;
-            g2.drawString(getText(), x, y);
+            int cx = (getWidth() - fm.stringWidth(getText())) / 2;
+            int cy = (getHeight() + fm.getAscent() - fm.getDescent()) / 2;
+            
+            g2.setColor(textColor);
+            g2.drawString(getText(), cx, cy);
+            
             g2.dispose();
         }
     }
 
     private static class ModernScrollBarUI extends BasicScrollBarUI {
         private final Theme theme;
+        private boolean isHovered = false;
+        private boolean isPressed = false;
 
         ModernScrollBarUI(Theme theme) {
             this.theme = theme;
+        }
+
+        @Override
+        protected void installListeners() {
+            super.installListeners();
+            scrollbar.addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseEntered(MouseEvent e) {
+                    isHovered = true;
+                    scrollbar.repaint();
+                }
+
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    isHovered = false;
+                    scrollbar.repaint();
+                }
+
+                @Override
+                public void mousePressed(MouseEvent e) {
+                    isPressed = true;
+                    scrollbar.repaint();
+                }
+
+                @Override
+                public void mouseReleased(MouseEvent e) {
+                    isPressed = false;
+                    scrollbar.repaint();
+                }
+            });
         }
 
         @Override
@@ -327,12 +491,7 @@ public class BirthCalculator extends JFrame {
 
         @Override
         protected void paintTrack(Graphics g, JComponent c, Rectangle trackBounds) {
-            Graphics2D g2 = (Graphics2D) g.create();
-            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            g2.setColor(theme.inputBackground);
-            g2.fillRoundRect(trackBounds.x + 3, trackBounds.y + 3,
-                trackBounds.width - 6, trackBounds.height - 6, 10, 10);
-            g2.dispose();
+            // Completely transparent track to let the card/background show through
         }
 
         @Override
@@ -343,17 +502,494 @@ public class BirthCalculator extends JFrame {
 
             Graphics2D g2 = (Graphics2D) g.create();
             g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-            GradientPaint gradient = new GradientPaint(
-                thumbBounds.x, thumbBounds.y, theme.primary,
-                thumbBounds.x + thumbBounds.width, thumbBounds.y + thumbBounds.height, theme.secondary);
-            g2.setPaint(gradient);
-            g2.fillRoundRect(thumbBounds.x + 3, thumbBounds.y + 3,
-                thumbBounds.width - 6, thumbBounds.height - 6, 10, 10);
+            
+            boolean isDark = theme.backgroundTop.getRed() < 128;
+            Color baseColor = isDark ? Color.WHITE : Color.BLACK;
+            
+            int alphaMain = isPressed ? 140 : (isHovered ? 100 : 30);
+            int alphaGlow = isPressed ? 200 : (isHovered ? 160 : 50);
+            
+            int thumbWidth = isHovered ? 8 : 6;
+            int x = thumbBounds.x + (thumbBounds.width - thumbWidth) / 2;
+            
+            int padY = 4;
+            int h = Math.max(16, thumbBounds.height - padY * 2);
+            int y = thumbBounds.y + padY;
+            
+            GradientPaint glassGradient = new GradientPaint(
+                x, y, new Color(theme.primary.getRed(), theme.primary.getGreen(), theme.primary.getBlue(), alphaMain),
+                x + thumbWidth, y, new Color(baseColor.getRed(), baseColor.getGreen(), baseColor.getBlue(), alphaGlow)
+            );
+            
+            g2.setPaint(glassGradient);
+            g2.fillRoundRect(x, y, thumbWidth, h, thumbWidth, thumbWidth);
+            
+            // Add a glossy bubble reflection (sheen)
+            g2.setPaint(new GradientPaint(
+                x, y, new Color(255, 255, 255, isHovered ? 140 : 60),
+                x, y + h / 2, new Color(255, 255, 255, 0)
+            ));
+            g2.fillRoundRect(x + 1, y + 1, thumbWidth - 2, h - 2, thumbWidth - 2, thumbWidth - 2);
+            
+            g2.setColor(new Color(255, 255, 255, isHovered ? 60 : 20));
+            g2.drawRoundRect(x, y, thumbWidth, h, thumbWidth, thumbWidth);
+            
             g2.dispose();
         }
     }
 
+    private static class VectorIcon implements Icon {
+        enum Type { CALENDAR, PLUS, CLOSE, ARROW_LEFT }
+        private final Type type;
+        private final int width;
+        private final int height;
+        private final Color color;
+
+        VectorIcon(Type type, int width, int height, Color color) {
+            this.type = type;
+            this.width = width;
+            this.height = height;
+            this.color = color;
+        }
+
+        @Override
+        public int getIconWidth() { return width; }
+
+        @Override
+        public int getIconHeight() { return height; }
+
+        @Override
+        public void paintIcon(Component c, Graphics g, int x, int y) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(color);
+            
+            switch (type) {
+                case CALENDAR:
+                    g2.setStroke(new BasicStroke(1.5f));
+                    g2.drawRoundRect(x + 2, y + 4, width - 4, height - 6, 3, 3);
+                    g2.drawLine(x + 2, y + 8, x + width - 2, y + 8);
+                    g2.fillRect(x + 5, y + 1, 2, 4);
+                    g2.fillRect(x + width - 7, y + 1, 2, 4);
+                    g2.fillRect(x + 5, y + 11, 2, 2);
+                    g2.fillRect(x + 9, y + 11, 2, 2);
+                    g2.fillRect(x + 13, y + 11, 2, 2);
+                    g2.fillRect(x + 5, y + 15, 2, 2);
+                    g2.fillRect(x + 9, y + 15, 2, 2);
+                    g2.fillRect(x + 13, y + 15, 2, 2);
+                    break;
+                case PLUS:
+                    g2.setStroke(new BasicStroke(2.5f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g2.drawLine(x + width/2, y + 3, x + width/2, y + height - 3);
+                    g2.drawLine(x + 3, y + height/2, x + width - 3, y + height/2);
+                    break;
+                case CLOSE:
+                    g2.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g2.drawLine(x + 4, y + 4, x + width - 4, y + height - 4);
+                    g2.drawLine(x + width - 4, y + 4, x + 4, y + height - 4);
+                    break;
+                case ARROW_LEFT:
+                    g2.setStroke(new BasicStroke(2.0f, BasicStroke.CAP_ROUND, BasicStroke.JOIN_ROUND));
+                    g2.drawLine(x + 4, y + height/2, x + width - 4, y + height/2);
+                    g2.drawLine(x + 4, y + height/2, x + 10, y + 4);
+                    g2.drawLine(x + 4, y + height/2, x + 10, y + height - 4);
+                    break;
+            }
+            g2.dispose();
+        }
+    }
+
+    private class MetricCard extends JPanel {
+        private final JLabel label;
+        private final JLabel value;
+        private long animationStartTime = 0;
+        private int animationDelay = 0;
+
+        public void triggerEntryAnimation(int delayMs) {
+            this.animationStartTime = System.currentTimeMillis();
+            this.animationDelay = delayMs;
+        }
+
+        private float getEntryProgress() {
+            if (animationStartTime == 0) return 1.0f;
+            long elapsed = System.currentTimeMillis() - (animationStartTime + animationDelay);
+            if (elapsed < 0) return 0f;
+            if (elapsed >= 400) {
+                animationStartTime = 0;
+                return 1.0f;
+            }
+            float p = elapsed / 400f;
+            return 1.0f - (float)Math.pow(1.0f - p, 3);
+        }
+
+        @Override
+        public void paint(Graphics g) {
+            float entryProgress = getEntryProgress();
+            if (entryProgress == 0f) return;
+            if (entryProgress >= 1.0f) {
+                super.paint(g);
+                return;
+            }
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, entryProgress));
+            g2.translate(0, (int)((1.0f - entryProgress) * 15));
+            super.paint(g2);
+            g2.dispose();
+        }
+
+        MetricCard(String title, String initialValue) {
+            setLayout(new BorderLayout(2, 2));
+            setOpaque(false);
+            setBorder(BorderFactory.createEmptyBorder(10, 12, 18, 12));
+
+            label = new JLabel(title);
+            label.setFont(new Font(UI_FONT, Font.PLAIN, 11));
+            label.setForeground(currentTheme.textMuted);
+
+            value = new JLabel(initialValue);
+            value.setFont(new Font(UI_FONT, Font.BOLD, 17));
+            value.setForeground(currentTheme.textMain);
+
+            add(label, BorderLayout.NORTH);
+            add(value, BorderLayout.CENTER);
+        }
+
+        void setValue(String val) {
+            value.setText(val);
+        }
+
+        void updateColors() {
+            label.setForeground(currentTheme.textMuted);
+            value.setForeground(currentTheme.textMain);
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2 = (Graphics2D) g.create();
+            paintLiquidGlass(g2, getWidth(), getHeight(), 24, false);
+            g2.dispose();
+        }
+    }
+
+    private class HeaderCard extends JPanel {
+        private final JLabel titleLabel;
+        private final JLabel ageYearsLabel;
+        private final JLabel ageDetailLabel;
+        private long animationStartTime = 0;
+        private int animationDelay = 0;
+
+        public void triggerEntryAnimation(int delayMs) {
+            this.animationStartTime = System.currentTimeMillis();
+            this.animationDelay = delayMs;
+        }
+
+        private float getEntryProgress() {
+            if (animationStartTime == 0) return 1.0f;
+            long elapsed = System.currentTimeMillis() - (animationStartTime + animationDelay);
+            if (elapsed < 0) return 0f;
+            if (elapsed >= 400) {
+                animationStartTime = 0;
+                return 1.0f;
+            }
+            float p = elapsed / 400f;
+            return 1.0f - (float)Math.pow(1.0f - p, 3);
+        }
+
+        @Override
+        public void paint(Graphics g) {
+            float entryProgress = getEntryProgress();
+            if (entryProgress == 0f) return;
+            if (entryProgress >= 1.0f) {
+                super.paint(g);
+                return;
+            }
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, entryProgress));
+            g2.translate(0, (int)((1.0f - entryProgress) * 15));
+            super.paint(g2);
+            g2.dispose();
+        }
+
+        HeaderCard() {
+            setLayout(new BoxLayout(this, BoxLayout.Y_AXIS));
+            setOpaque(false);
+            setBorder(BorderFactory.createEmptyBorder(14, 18, 22, 18));
+
+            titleLabel = new JLabel("VĚK DNES");
+            titleLabel.setFont(new Font(UI_FONT, Font.BOLD, 11));
+            titleLabel.setForeground(new Color(255, 255, 255, 200));
+            titleLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+            ageYearsLabel = new JLabel("0 let");
+            ageYearsLabel.setFont(new Font(UI_FONT, Font.BOLD, 32));
+            ageYearsLabel.setForeground(Color.WHITE);
+            ageYearsLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+            ageDetailLabel = new JLabel("0 měsíců a 0 dní");
+            ageDetailLabel.setFont(new Font(UI_FONT, Font.PLAIN, 14));
+            ageDetailLabel.setForeground(new Color(255, 255, 255, 220));
+            ageDetailLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
+
+            add(titleLabel);
+            add(Box.createRigidArea(new Dimension(0, 4)));
+            add(ageYearsLabel);
+            add(Box.createRigidArea(new Dimension(0, 2)));
+            add(ageDetailLabel);
+        }
+
+        void setAge(int years, int months, int days) {
+            ageYearsLabel.setText(years + " let");
+            ageDetailLabel.setText(months + " měsíců a " + days + " dní");
+        }
+
+        void updateAll(String title, String mainValue, String subValue) {
+            titleLabel.setText(title);
+            ageYearsLabel.setText(mainValue);
+            ageDetailLabel.setText(subValue);
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            super.paintComponent(g);
+            Graphics2D g2 = (Graphics2D) g.create();
+            paintLiquidGlass(g2, getWidth(), getHeight(), 28, true);
+            g2.dispose();
+        }
+    }
+
+    private Map<String, BufferedImage> glassCache = new HashMap<>();
+
+    private void paintLiquidGlass(Graphics2D g2, int width, int height, int radius, boolean isHeader) {
+        if (width <= 0 || height <= 0) return;
+        String key = width + "x" + height + "_" + radius + "_" + isHeader + "_" + currentTheme.name;
+        BufferedImage img = glassCache.get(key);
+        if (img == null) {
+            img = new BufferedImage(width, height, BufferedImage.TYPE_INT_ARGB);
+            Graphics2D cg = img.createGraphics();
+            cg.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            boolean isDark = currentTheme.backgroundTop.getRed() < 128;
+            
+            int shadowOffset = 10;
+            int glassHeight = height - shadowOffset;
+
+            cg.setColor(new Color(0, 0, 0, 40));
+            cg.fillRoundRect(0, 3, width, glassHeight, radius, radius);
+            cg.setColor(new Color(0, 0, 0, 20));
+            cg.fillRoundRect(0, 6, width, glassHeight, radius, radius);
+            cg.setColor(new Color(0, 0, 0, 10));
+            cg.fillRoundRect(0, 10, width, glassHeight, radius, radius);
+
+            Color baseColor = isDark ? new Color(255, 255, 255, 12) : new Color(255, 255, 255, 160);
+            if (isHeader) {
+                GradientPaint headerGrad = new GradientPaint(
+                    0, 0, new Color(currentTheme.primary.getRed(), currentTheme.primary.getGreen(), currentTheme.primary.getBlue(), 160),
+                    width, 0, new Color(currentTheme.secondary.getRed(), currentTheme.secondary.getGreen(), currentTheme.secondary.getBlue(), 160)
+                );
+                cg.setPaint(headerGrad);
+                cg.fillRoundRect(0, 0, width, glassHeight, radius, radius);
+            } else {
+                cg.setColor(baseColor);
+                cg.fillRoundRect(0, 0, width, glassHeight, radius, radius);
+            }
+            
+            GradientPaint sheen = new GradientPaint(
+                0, 0, new Color(255, 255, 255, isDark ? 20 : 100),
+                width, glassHeight, new Color(255, 255, 255, 0)
+            );
+            cg.setPaint(sheen);
+            cg.fillRoundRect(0, 0, width, glassHeight, radius, radius);
+            
+            cg.setColor(new Color(255, 255, 255, isDark ? 40 : 200));
+            cg.drawRoundRect(0, 0, width - 1, glassHeight - 1, radius, radius);
+            cg.dispose();
+            glassCache.put(key, img);
+        }
+        g2.drawImage(img, 0, 0, null);
+    }
+
+    private BufferedImage bgCache = null;
+    private int bgCacheWidth = -1;
+    private int bgCacheHeight = -1;
+    private Theme bgCacheTheme = null;
+
+    private void paintVibrantBackground(Graphics2D g2, int width, int height) {
+        if (width <= 0 || height <= 0) return;
+        
+        if (currentTheme != null && currentTheme.name.startsWith("Test")) {
+            // Premium, subtle interactive background
+            
+            // 1. Base dark ambient background
+            GradientPaint base = new GradientPaint(0, 0, currentTheme.backgroundTop, 0, height, currentTheme.backgroundBottom);
+            g2.setPaint(base);
+            g2.fillRect(0, 0, width, height);
+
+            // 2. Subtle static ambient blobs for depth
+            RadialGradientPaint ambient1 = new RadialGradientPaint(
+                width * 0.8f, height * 0.2f, width * 0.7f,
+                new float[]{0f, 1f},
+                new Color[]{new Color(currentTheme.secondary.getRed(), currentTheme.secondary.getGreen(), currentTheme.secondary.getBlue(), 35), new Color(0,0,0,0)}
+            );
+            g2.setPaint(ambient1);
+            g2.fillRect(0, 0, width, height);
+
+            RadialGradientPaint ambient2 = new RadialGradientPaint(
+                width * 0.2f, height * 0.85f, width * 0.7f,
+                new float[]{0f, 1f},
+                new Color[]{new Color(currentTheme.accent.getRed(), currentTheme.accent.getGreen(), currentTheme.accent.getBlue(), 25), new Color(0,0,0,0)}
+            );
+            g2.setPaint(ambient2);
+            g2.fillRect(0, 0, width, height);
+            
+            // 2.5 Subtle flashing falling stars
+            if (ambientStars == null || lastStarWidth != width || lastStarHeight != height) {
+                ambientStars = new Star[150]; // 150 stars for a rich starry night
+                for (int i = 0; i < ambientStars.length; i++) {
+                    ambientStars[i] = new Star(width, height);
+                }
+                lastStarWidth = width;
+                lastStarHeight = height;
+            }
+            
+            long time = System.currentTimeMillis();
+            for (Star star : ambientStars) {
+                star.update(width, height);
+                float sine = (float) ((Math.sin(time * star.speed + star.phase) + 1.0) / 2.0); // 0.0 to 1.0
+                // Use a high power to create a sharp "flash" peak that is dark most of the time
+                float spike = (float) Math.pow(sine, 20);
+                float opacity = 0.08f + (0.8f * spike); // Faint 8% base opacity, flashes up to ~88% opacity
+                g2.setColor(new Color(255, 255, 255, (int)(Math.min(1.0f, opacity) * 255)));
+                g2.fillOval((int)star.x, (int)star.y, (int)star.size, (int)star.size);
+            }
+            
+            // 3. Mouse following spotlight (brighter)
+            if (globalMouseX >= 0 && globalMouseY >= 0) {
+                int glowRadius = Math.max(width, height) / 2 + 100;
+                RadialGradientPaint glow = new RadialGradientPaint(
+                    globalMouseX, globalMouseY, glowRadius,
+                    new float[]{0f, 0.3f, 1f},
+                    new Color[]{
+                        new Color(currentTheme.primary.getRed(), currentTheme.primary.getGreen(), currentTheme.primary.getBlue(), 110),
+                        new Color(currentTheme.primary.getRed(), currentTheme.primary.getGreen(), currentTheme.primary.getBlue(), 35),
+                        new Color(0, 0, 0, 0)
+                    }
+                );
+                g2.setPaint(glow);
+                g2.fillOval(globalMouseX - glowRadius, globalMouseY - glowRadius, glowRadius * 2, glowRadius * 2);
+            }
+            return;
+        }
+
+        if (bgCache == null || bgCacheWidth != width || bgCacheHeight != height || bgCacheTheme != currentTheme) {
+            bgCache = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+            Graphics2D cg = bgCache.createGraphics();
+            cg.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            
+            GradientPaint gradient = new GradientPaint(0, 0, currentTheme.backgroundTop,
+                0, height, currentTheme.backgroundBottom);
+            cg.setPaint(gradient);
+            cg.fillRect(0, 0, width, height);
+
+            int blobSize = Math.max(width, height) / 2;
+            if (blobSize > 0) {
+                RadialGradientPaint blob1 = new RadialGradientPaint(
+                    Math.max(1, blobSize / 2f), Math.max(1, blobSize / 2f), Math.max(1, blobSize),
+                    new float[]{0f, 1f},
+                    new Color[]{new Color(currentTheme.primary.getRed(), currentTheme.primary.getGreen(), currentTheme.primary.getBlue(), 120), new Color(0,0,0,0)}
+                );
+                cg.setPaint(blob1);
+                cg.fillOval(-blobSize/4, -blobSize/4, blobSize*2, blobSize*2);
+                
+                RadialGradientPaint blob2 = new RadialGradientPaint(
+                    Math.max(1, width - blobSize / 2f), Math.max(1, height - blobSize / 2f), Math.max(1, blobSize),
+                    new float[]{0f, 1f},
+                    new Color[]{new Color(currentTheme.secondary.getRed(), currentTheme.secondary.getGreen(), currentTheme.secondary.getBlue(), 120), new Color(0,0,0,0)}
+                );
+                cg.setPaint(blob2);
+                cg.fillOval(width - blobSize, height - blobSize, blobSize*2, blobSize*2);
+                
+                RadialGradientPaint blob3 = new RadialGradientPaint(
+                    Math.max(1, width / 2f), Math.max(1, height / 2f), Math.max(1, blobSize / 1.5f),
+                    new float[]{0f, 1f},
+                    new Color[]{new Color(currentTheme.accent.getRed(), currentTheme.accent.getGreen(), currentTheme.accent.getBlue(), 80), new Color(0,0,0,0)}
+                );
+                cg.setPaint(blob3);
+                cg.fillOval((int)(width / 2f - blobSize/2f), (int)(height / 2f - blobSize/2f), blobSize, blobSize);
+            }
+            cg.dispose();
+            bgCacheWidth = width;
+            bgCacheHeight = height;
+            bgCacheTheme = currentTheme;
+        }
+        g2.drawImage(bgCache, 0, 0, null);
+    }
+
     private static final Theme[] THEMES = new Theme[] {
+        new Theme(
+            "Test 1",
+            new Color(140, 180, 255), // Primary: soft slate blue
+            new Color(160, 130, 230), // Secondary: soft muted lavender
+            new Color(100, 190, 170), // Accent: muted deep mint
+            new Color(140, 180, 255, 60), 
+            new Color(15, 17, 26),    // Top bg: deep twilight blue/grey
+            new Color(10, 11, 16),    // Bottom bg: darker twilight
+            new Color(22, 25, 38, 180), // Frosted cards
+            new Color(230, 235, 245), // Soft white text
+            new Color(140, 150, 170), // Muted text
+            new Color(18, 20, 30)     // Inputs
+        ),
+        new Theme(
+            "Test 2",
+            new Color(120, 230, 160), // Primary: soft emerald glow
+            new Color(80, 190, 210),  // Secondary: teal ambient
+            new Color(200, 220, 120), // Accent: lime ambient
+            new Color(120, 230, 160, 60), 
+            new Color(15, 24, 18),    // Top bg: deep forest
+            new Color(10, 16, 12),    // Bottom bg: dark forest
+            new Color(22, 36, 26, 180), // Frosted cards
+            new Color(235, 245, 235), // Text
+            new Color(140, 170, 150), // Muted text
+            new Color(18, 28, 20)     // Inputs
+        ),
+        new Theme(
+            "Test 3",
+            new Color(255, 120, 120), // Primary: soft crimson glow
+            new Color(240, 160, 100), // Secondary: amber ambient
+            new Color(200, 100, 150), // Accent: rose ambient
+            new Color(255, 120, 120, 60), 
+            new Color(26, 15, 15),    // Top bg: deep ember
+            new Color(16, 10, 10),    // Bottom bg: dark ember
+            new Color(38, 22, 22, 180), // Frosted cards
+            new Color(245, 230, 230), // Text
+            new Color(170, 140, 140), // Muted text
+            new Color(30, 18, 18)     // Inputs
+        ),
+        new Theme(
+            "Test 4",
+            new Color(255, 210, 120), // Primary: soft gold glow
+            new Color(240, 180, 100), // Secondary: warm ambient
+            new Color(250, 160, 120), // Accent: peach ambient
+            new Color(255, 210, 120, 60), 
+            new Color(26, 22, 15),    // Top bg: deep gold
+            new Color(16, 13, 10),    // Bottom bg: dark gold
+            new Color(38, 30, 22, 180), // Frosted cards
+            new Color(245, 240, 230), // Text
+            new Color(170, 160, 140), // Muted text
+            new Color(30, 24, 18)     // Inputs
+        ),
+        new Theme(
+            "Test 5",
+            new Color(210, 120, 255), // Primary: soft purple glow
+            new Color(240, 140, 200), // Secondary: magenta ambient
+            new Color(150, 120, 240), // Accent: violet ambient
+            new Color(210, 120, 255, 60), 
+            new Color(22, 15, 26),    // Top bg: deep amethyst
+            new Color(13, 10, 16),    // Bottom bg: dark amethyst
+            new Color(32, 22, 38, 180), // Frosted cards
+            new Color(240, 230, 245), // Text
+            new Color(160, 140, 170), // Muted text
+            new Color(26, 18, 30)     // Inputs
+        ),
         new Theme(
             "Noctalia",
             new Color(125, 169, 255),
@@ -554,6 +1190,31 @@ public class BirthCalculator extends JFrame {
     }
     
     private void initializeUI() {
+        Toolkit.getDefaultToolkit().addAWTEventListener(event -> {
+            if (event instanceof MouseEvent) {
+                MouseEvent me = (MouseEvent) event;
+                if (me.getID() == MouseEvent.MOUSE_MOVED || me.getID() == MouseEvent.MOUSE_DRAGGED) {
+                    if (mainPanel != null && mainPanel.isShowing()) {
+                        Point p = me.getLocationOnScreen();
+                        SwingUtilities.convertPointFromScreen(p, mainPanel);
+                        globalMouseX = p.x;
+                        globalMouseY = p.y;
+                        if (currentTheme != null && currentTheme.name.startsWith("Test")) {
+                            mainPanel.repaint();
+                        }
+                    }
+                }
+            }
+        }, AWTEvent.MOUSE_MOTION_EVENT_MASK);
+
+        // Timer for ambient background animations (e.g. stars flashing)
+        Timer backgroundAnimationTimer = new Timer(33, e -> {
+            if (currentTheme != null && currentTheme.name.startsWith("Test") && mainPanel != null && mainPanel.isShowing()) {
+                mainPanel.repaint();
+            }
+        });
+        backgroundAnimationTimer.start();
+
         getContentPane().setBackground(currentTheme.backgroundTop);
 
         // Hlavní panel s BorderLayout
@@ -561,17 +1222,7 @@ public class BirthCalculator extends JFrame {
             @Override
             protected void paintComponent(Graphics g) {
                 super.paintComponent(g);
-                Graphics2D g2 = (Graphics2D) g;
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                GradientPaint gradient = new GradientPaint(0, 0, currentTheme.backgroundTop,
-                    getWidth(), getHeight(), currentTheme.backgroundBottom);
-                g2.setPaint(gradient);
-                g2.fillRect(0, 0, getWidth(), getHeight());
-
-                g2.setColor(currentTheme.glow);
-                int[] bandX = {0, getWidth(), getWidth(), 0};
-                int[] bandY = {68, 0, 58, 128};
-                g2.fillPolygon(bandX, bandY, 4);
+                paintVibrantBackground((Graphics2D) g, getWidth(), getHeight());
             }
         };
         mainPanel.setOpaque(true);
@@ -591,16 +1242,20 @@ public class BirthCalculator extends JFrame {
                 Graphics2D g2 = (Graphics2D) g.create();
                 g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
                 g2.setColor(new Color(255, 255, 255, 40));
-                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 10, 10);
+                g2.fillRoundRect(0, 0, getWidth() - 1, getHeight() - 1, getWidth(), getHeight());
                 GradientPaint grad = new GradientPaint(0, 0, currentTheme.primary, getWidth(), getHeight(), currentTheme.secondary);
                 g2.setPaint(grad);
-                g2.fillRoundRect(2, 2, getWidth() - 5, getHeight() - 5, 8, 8);
-                g2.setFont(new Font(UI_FONT, Font.BOLD, 16));
+                g2.fillRoundRect(2, 2, getWidth() - 5, getHeight() - 5, getWidth() - 5, getHeight() - 5);
+                
+                int size = 18;
+                int cx = (getWidth() - size) / 2;
+                int cy = (getHeight() - 4 - size) / 2;
+                
+                g2.setStroke(new BasicStroke(2.0f));
                 g2.setColor(Color.WHITE);
-                FontMetrics fm = g2.getFontMetrics();
-                int x = (getWidth() - fm.stringWidth("🖌")) / 2;
-                int y = ((getHeight() - 4 - fm.getHeight()) / 2) + fm.getAscent();
-                g2.drawString("🖌", x, y);
+                g2.drawOval(cx, cy, size, size);
+                g2.fillArc(cx, cy, size, size, -90, 180);
+                
                 g2.dispose();
             }
         };
@@ -664,16 +1319,28 @@ public class BirthCalculator extends JFrame {
         inputPanel.add(instructionLabel, BorderLayout.NORTH);
         
         // Textové pole s lepším designem
-        dateField = new JTextField(20);
+        dateField = new JTextField(20) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(new Color(0, 0, 0, 45));
+                g2.fillRoundRect(0, 4, getWidth(), getHeight() - 2, getHeight(), getHeight());
+                g2.setColor(new Color(0, 0, 0, 40));
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), getHeight(), getHeight());
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        dateField.setOpaque(false);
         dateField.setFont(FONT_INPUT);
         dateField.setHorizontalAlignment(JTextField.CENTER);
         dateField.setToolTipText("Například 15.03.2000");
         dateField.setPreferredSize(new Dimension(260, 48));
         dateField.addActionListener(e -> calculateAge());
-        dateField.setBackground(currentTheme.inputBackground);
-        dateField.setForeground(currentTheme.textMain);
+        dateField.setForeground(Color.WHITE);
         updateDateFieldBorder(false);
-        dateField.setCaretColor(currentTheme.primary);
+        dateField.setCaretColor(Color.WHITE);
         dateField.addFocusListener(new FocusAdapter() {
             @Override
             public void focusGained(FocusEvent e) {
@@ -694,22 +1361,101 @@ public class BirthCalculator extends JFrame {
         dateConstraints.gridx = 0;
         datePanel.add(dateField, dateConstraints);
 
-        calendarButton = createStyledButton("📅 Kalendář", currentTheme.primary, currentTheme.secondary);
-        calendarButton.setPreferredSize(new Dimension(124, 42));
+        calendarButton = createStyledButton("Kalendář", currentTheme.primary, currentTheme.secondary);
+        calendarButton.setIcon(new VectorIcon(VectorIcon.Type.CALENDAR, 16, 16, Color.WHITE));
+        calendarButton.setPreferredSize(new Dimension(136, 54));
         calendarButton.addActionListener(e -> showCalendarDialog());
         dateConstraints.gridx = 1;
         datePanel.add(calendarButton, dateConstraints);
 
-        historyCombo = new JComboBox<>();
-        historyCombo.setFont(FONT_BODY);
-        historyCombo.setPreferredSize(new Dimension(260, 34));
-        historyCombo.addActionListener(e -> selectHistoryDate());
+        historyButton = new JButton() {
+            private float hoverProgress = 0f;
+            private javax.swing.Timer hoverTimer;
+            private boolean isHovered = false;
+
+            {
+                addMouseListener(new MouseAdapter() {
+                    @Override
+                    public void mouseEntered(MouseEvent e) { isHovered = true; animateHover(); }
+                    @Override
+                    public void mouseExited(MouseEvent e) { isHovered = false; animateHover(); }
+                });
+            }
+
+            private void animateHover() {
+                if (hoverTimer != null && hoverTimer.isRunning()) hoverTimer.stop();
+                hoverTimer = new javax.swing.Timer(16, e -> {
+                    if (isHovered && hoverProgress < 1f) hoverProgress += 0.15f;
+                    else if (!isHovered && hoverProgress > 0f) hoverProgress -= 0.15f;
+                    else ((javax.swing.Timer)e.getSource()).stop();
+                    hoverProgress = Math.max(0f, Math.min(1f, hoverProgress));
+                    repaint();
+                });
+                hoverTimer.start();
+            }
+
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+                int panelW = getWidth();
+                int panelH = getHeight();
+                int w = 260; // Base visual width
+                int h = 48;  // Base visual height
+
+                float scale = 1.0f + (hoverProgress * 0.04f);
+                g2.translate(panelW/2.0, panelH/2.0);
+                g2.scale(scale, scale);
+                g2.translate(-w/2.0, -h/2.0);
+
+                if (hoverProgress > 0) {
+                    g2.setColor(new Color(0, 0, 0, (int)(hoverProgress * 30)));
+                    g2.fillRoundRect(0, 6, w, h - 2, h, h);
+                }
+
+                g2.setColor(new Color(0, 0, 0, 45));
+                g2.fillRoundRect(0, 4, w, h - 2, h, h);
+                g2.setColor(new Color(0, 0, 0, 40 + (int)(hoverProgress * 20)));
+                g2.fillRoundRect(0, 0, w, h, h, h);
+                
+                // Draw border manually so it scales
+                g2.setColor(new Color(255, 255, 255, 100));
+                g2.setStroke(new BasicStroke(1));
+                g2.drawRoundRect(0, 0, w - 1, h - 1, h, h);
+
+                g2.setColor(Color.WHITE);
+                g2.setFont(FONT_INPUT);
+                String text = getText();
+                if (text == null || text.isEmpty()) text = "Vyberte z historie";
+                FontMetrics fm = g2.getFontMetrics();
+                int x = (w - fm.stringWidth(text)) / 2;
+                int y = (h - fm.getHeight()) / 2 + fm.getAscent();
+                g2.drawString(text, x, y);
+
+                g2.setColor(new Color(255, 255, 255, 120));
+                int arrowX = w - 24;
+                int arrowY = h / 2 - 2;
+                int[] xPoints = {arrowX, arrowX + 8, arrowX + 4};
+                int[] yPoints = {arrowY, arrowY, arrowY + 5};
+                g2.fillPolygon(xPoints, yPoints, 3);
+                g2.dispose();
+            }
+        };
+        historyButton.setOpaque(false);
+        historyButton.setContentAreaFilled(false);
+        historyButton.setFocusPainted(false);
+        historyButton.setBorderPainted(false);
+        historyButton.setBorder(BorderFactory.createEmptyBorder());
+        historyButton.setCursor(new Cursor(Cursor.HAND_CURSOR));
+        historyButton.setPreferredSize(new Dimension(274, 62)); // Extra space for scaling effect
+        historyButton.addActionListener(e -> showHistoryMenu());
         dateConstraints.gridy = 1;
         dateConstraints.gridx = 0;
-        datePanel.add(historyCombo, dateConstraints);
+        datePanel.add(historyButton, dateConstraints);
 
         removeHistoryButton = createStyledButton("Odebrat", currentTheme.accent, currentTheme.accent.brighter());
-        removeHistoryButton.setPreferredSize(new Dimension(124, 34));
+        removeHistoryButton.setPreferredSize(new Dimension(136, 46));
         removeHistoryButton.addActionListener(e -> removeSelectedHistoryDate());
         dateConstraints.gridx = 1;
         datePanel.add(removeHistoryButton, dateConstraints);
@@ -720,19 +1466,19 @@ public class BirthCalculator extends JFrame {
         buttonPanel.setOpaque(false);
         
         calculateButton = createStyledButton("Calculator", currentTheme.primary, currentTheme.secondary);
-        calculateButton.setPreferredSize(new Dimension(170, 48));
+        calculateButton.setPreferredSize(new Dimension(182, 60));
         calculateButton.setToolTipText("Vypočítat věk");
         calculateButton.addActionListener(e -> calculateAge());
         buttonPanel.add(calculateButton);
 
         birthdaysButton = createStyledButton("Friends BD", currentTheme.secondary, currentTheme.primary);
-        birthdaysButton.setPreferredSize(new Dimension(170, 48));
+        birthdaysButton.setPreferredSize(new Dimension(182, 60));
         birthdaysButton.setToolTipText("Narozeniny přátel");
         birthdaysButton.addActionListener(e -> showBirthdaysDialog());
         buttonPanel.add(birthdaysButton);
         
         clearButton = createStyledButton("Clear", currentTheme.accent, currentTheme.accent.brighter());
-        clearButton.setPreferredSize(new Dimension(170, 48));
+        clearButton.setPreferredSize(new Dimension(182, 60));
         clearButton.setToolTipText("Vymazat");
         clearButton.addActionListener(e -> clear());
         buttonPanel.add(clearButton);
@@ -769,21 +1515,18 @@ public class BirthCalculator extends JFrame {
         resultsLabel.setForeground(currentTheme.primary);
         resultsPanel.add(resultsLabel, BorderLayout.NORTH);
         
-        resultsArea = new JEditorPane();
-        resultsArea.setContentType("text/html");
-        resultsArea.putClientProperty(JEditorPane.HONOR_DISPLAY_PROPERTIES, Boolean.TRUE);
-        resultsArea.setFont(FONT_BODY);
-        resultsArea.setEditable(false);
-        resultsArea.setOpaque(true);
-        resultsArea.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
-        resultsArea.setMargin(new Insets(0, 0, 0, 0));
-        resultsArea.setBackground(currentTheme.inputBackground);
-        resultsArea.setForeground(currentTheme.textMain);
+        resultsLayout = new CardLayout();
+        resultsContentPanel = new JPanel(resultsLayout);
+        resultsContentPanel.setOpaque(false);
+
+        JPanel emptyStatePanel = createEmptyStatePanel();
+        JPanel dashboardPanel = createDashboardPanel();
+
+        resultsContentPanel.add(emptyStatePanel, "EMPTY");
+        resultsContentPanel.add(dashboardPanel, "DASHBOARD");
+
+        resultsPanel.add(resultsContentPanel, BorderLayout.CENTER);
         setEmptyResults();
-        
-        resultsScrollPane = new JScrollPane(resultsArea);
-        styleResultsScrollPane();
-        resultsPanel.add(resultsScrollPane, BorderLayout.CENTER);
         
         // ===== KOMBINACE VŠECH PANELŮ =====
         centerPanel = new JPanel(new BorderLayout(15, 15));
@@ -803,32 +1546,139 @@ public class BirthCalculator extends JFrame {
         
         add(mainPanel);
         pack();
-        setSize(new Dimension(920, 750));
+        setSize(new Dimension(1100, 920));
     }
     
+    private class ThemeFadeGlassPane extends JComponent {
+        private final BufferedImage image;
+        private float alpha = 1.0f;
+
+        public ThemeFadeGlassPane(BufferedImage image) {
+            this.image = image;
+            setOpaque(false);
+        }
+
+        public void setAlpha(float alpha) {
+            this.alpha = alpha;
+            repaint();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            if (alpha > 0 && image != null) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha));
+                g2.drawImage(image, 0, 0, null);
+                g2.dispose();
+            }
+        }
+    }
+
+    private class ModalOverlayPanel extends JPanel {
+        private float alpha = 0f;
+        private int yOffset = 20;
+
+        public ModalOverlayPanel() {
+            super(null);
+            setOpaque(false);
+            addMouseListener(new MouseAdapter() {});
+            addMouseWheelListener(e -> {});
+            addKeyListener(new java.awt.event.KeyAdapter() {});
+            setFocusable(true);
+            setRequestFocusEnabled(true);
+        }
+
+        public void setAlpha(float alpha) {
+            this.alpha = alpha;
+            repaint();
+        }
+
+        public void setYOffset(int yOffset) {
+            this.yOffset = yOffset;
+        }
+
+        @Override
+        public void paint(Graphics g) {
+            if (alpha == 0f) return;
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setComposite(AlphaComposite.getInstance(AlphaComposite.SRC_OVER, alpha));
+            super.paint(g2);
+            g2.dispose();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            g.setColor(new Color(0, 0, 0, 150));
+            g.fillRect(0, 0, getWidth(), getHeight());
+        }
+    }
+
+    private void crossfadeAnimation(Runnable uiUpdate) {
+        if (getRootPane().getWidth() <= 0 || getRootPane().getHeight() <= 0) {
+            uiUpdate.run();
+            return;
+        }
+        final BufferedImage fadeImage = new BufferedImage(getRootPane().getWidth(), getRootPane().getHeight(), BufferedImage.TYPE_INT_ARGB);
+        Graphics2D g2d = fadeImage.createGraphics();
+        getRootPane().paint(g2d);
+        g2d.dispose();
+
+        final ThemeFadeGlassPane glassPane = new ThemeFadeGlassPane(fadeImage);
+        final Component oldGlassPane = getGlassPane();
+        setGlassPane(glassPane);
+        glassPane.setVisible(true);
+
+        uiUpdate.run();
+
+        SwingUtilities.updateComponentTreeUI(this);
+        mainPanel.repaint();
+
+        javax.swing.Timer fadeTimer = new javax.swing.Timer(16, null);
+        fadeTimer.addActionListener(new ActionListener() {
+            long startTime = System.currentTimeMillis();
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                float progress = Math.min(1.0f, elapsed / 400f);
+                float ease = 1.0f - (float)Math.pow(1.0f - progress, 3);
+                glassPane.setAlpha(1.0f - ease);
+                if (progress >= 1.0f) {
+                    ((javax.swing.Timer)e.getSource()).stop();
+                    glassPane.setVisible(false);
+                    setGlassPane(oldGlassPane);
+                }
+            }
+        });
+        fadeTimer.start();
+    }
+
     private void applyTheme(int themeIndex) {
         if (themeIndex < 0 || themeIndex >= THEMES.length) {
             return;
         }
 
-        currentTheme = THEMES[themeIndex];
-        preferences.putInt(PREF_THEME_INDEX, themeIndex);
+        crossfadeAnimation(() -> {
+            currentTheme = THEMES[themeIndex];
+            preferences.putInt(PREF_THEME_INDEX, themeIndex);
         getContentPane().setBackground(currentTheme.backgroundTop);
         mainPanel.setBackground(currentTheme.backgroundTop);
         
-        updateDateFieldBorder(dateField.hasFocus());
-        updateResultsPanelBorder();
-        dateField.setBackground(currentTheme.inputBackground);
-        dateField.setForeground(currentTheme.textMain);
-        dateField.setCaretColor(currentTheme.primary);
+        if (cardBirthDate != null) cardBirthDate.updateColors();
+        if (cardZodiac != null) cardZodiac.updateColors();
+        if (cardTodayDate != null) cardTodayDate.updateColors();
+        if (cardMonthsTotal != null) cardMonthsTotal.updateColors();
+        if (cardNextBirthday != null) cardNextBirthday.updateColors();
+        if (cardCountdown != null) cardCountdown.updateColors();
+        if (cardDaysTotal != null) cardDaysTotal.updateColors();
+        if (cardHoursTotal != null) cardHoursTotal.updateColors();
+        if (cardMinutesTotal != null) cardMinutesTotal.updateColors();
+        if (cardSecondsTotal != null) cardSecondsTotal.updateColors();
+        if (liveTimeLabel != null) liveTimeLabel.setForeground(currentTheme.textMuted);
 
-        resultsArea.setBackground(currentTheme.inputBackground);
-        resultsArea.setForeground(currentTheme.textMain);
-        styleResultsScrollPane();
         if (lastBirthDate == null) {
             setEmptyResults();
         } else {
-            renderResults(lastBirthDate, true);
+            renderResults(lastBirthDate, true, false);
         }
 
         instructionLabel.setForeground(currentTheme.textMuted);
@@ -836,9 +1686,8 @@ public class BirthCalculator extends JFrame {
         titleLabel.setForeground(Color.WHITE);
         subtitleLabel.setForeground(new Color(255, 255, 255, 220));
 
-        historyCombo.setBackground(currentTheme.cardBackground);
-        historyCombo.setForeground(currentTheme.textMain);
-        historyCombo.setBorder(BorderFactory.createLineBorder(currentTheme.primary.darker(), 1));
+        historyButton.setBackground(currentTheme.cardBackground);
+        historyButton.setForeground(currentTheme.textMain);
 
         calculateButton.setColors(currentTheme.primary, currentTheme.secondary);
         clearButton.setColors(currentTheme.accent, currentTheme.accent.brighter());
@@ -878,10 +1727,6 @@ public class BirthCalculator extends JFrame {
             birthdaysCountLabel.setForeground(currentTheme.primary);
         }
         if (detailPanel != null) {
-            detailNameLabel.setForeground(currentTheme.textMain);
-            detailBirthdateLabel.setForeground(currentTheme.textMuted);
-            detailAgeLabel.setForeground(currentTheme.textMuted);
-            detailCountdownLabel.setForeground(currentTheme.secondary);
             detailPanel.repaint();
             if (selectedBirthdayForDetail != null) {
                 updateBirthdayDetail();
@@ -902,47 +1747,256 @@ public class BirthCalculator extends JFrame {
         UIManager.put("MenuItem.font", FONT_BODY);
         UIManager.put("MenuItem.border", BorderFactory.createEmptyBorder(10, 15, 10, 15));
         
-        UIManager.put("ToolTip.background", currentTheme.cardBackground);
-        UIManager.put("ToolTip.foreground", currentTheme.textMain);
-        UIManager.put("ToolTip.border", BorderFactory.createLineBorder(currentTheme.primary, 1));
-        
-        UIManager.put("OptionPane.background", currentTheme.cardBackground);
-        UIManager.put("OptionPane.messageForeground", currentTheme.textMain);
-        
-        // Update existing components if necessary
-        SwingUtilities.updateComponentTreeUI(this);
-        
-        mainPanel.repaint();
-        centerPanel.repaint();
-        if (birthdayCard != null) {
-            birthdayCard.repaint();
-        }
-        resultsPanel.repaint();
+            getContentPane().setBackground(currentTheme.backgroundTop);
+            mainPanel.setBackground(currentTheme.backgroundTop);
+            
+            if (cardBirthDate != null) cardBirthDate.updateColors();
+            if (cardZodiac != null) cardZodiac.updateColors();
+            if (cardTodayDate != null) cardTodayDate.updateColors();
+            if (cardMonthsTotal != null) cardMonthsTotal.updateColors();
+            if (cardNextBirthday != null) cardNextBirthday.updateColors();
+            if (cardCountdown != null) cardCountdown.updateColors();
+            if (cardDaysTotal != null) cardDaysTotal.updateColors();
+            if (cardHoursTotal != null) cardHoursTotal.updateColors();
+            if (cardMinutesTotal != null) cardMinutesTotal.updateColors();
+            if (cardSecondsTotal != null) cardSecondsTotal.updateColors();
+            if (liveTimeLabel != null) liveTimeLabel.setForeground(currentTheme.textMuted);
+
+            if (lastBirthDate == null) {
+                setEmptyResults();
+            } else {
+                renderResults(lastBirthDate, true, false);
+            }
+
+            instructionLabel.setForeground(currentTheme.textMuted);
+            resultsLabel.setForeground(currentTheme.primary);
+            titleLabel.setForeground(Color.WHITE);
+            subtitleLabel.setForeground(new Color(255, 255, 255, 220));
+
+            historyButton.setBackground(currentTheme.cardBackground);
+            historyButton.setForeground(currentTheme.textMain);
+
+            calculateButton.setColors(currentTheme.primary, currentTheme.secondary);
+            clearButton.setColors(currentTheme.accent, currentTheme.accent.brighter());
+            calendarButton.setColors(currentTheme.primary, currentTheme.secondary);
+            if (birthdaysButton != null) {
+                birthdaysButton.setColors(currentTheme.secondary, currentTheme.primary);
+            }
+            if (birthdaysBackButton != null) {
+                birthdaysBackButton.setColors(currentTheme.accent, currentTheme.accent.brighter());
+            }
+            removeHistoryButton.setColors(currentTheme.accent, currentTheme.accent.brighter());
+            if (birthdayAddButton != null) {
+                birthdayAddButton.setColors(currentTheme.primary, currentTheme.secondary);
+            }
+            if (birthdayRemoveButton != null) {
+                birthdayRemoveButton.setColors(currentTheme.accent, currentTheme.accent.brighter());
+            }
+            if (birthdayPickDateButton != null) {
+                birthdayPickDateButton.setColors(currentTheme.primary, currentTheme.secondary);
+            }
+            if (birthdayNameField != null) {
+                birthdayNameField.setBackground(currentTheme.inputBackground);
+                birthdayNameField.setForeground(currentTheme.textMain);
+                birthdayNameField.setCaretColor(currentTheme.primary);
+            }
+            if (birthdayDateField != null) {
+                birthdayDateField.setBackground(currentTheme.inputBackground);
+                birthdayDateField.setForeground(currentTheme.textMain);
+                birthdayDateField.setCaretColor(currentTheme.primary);
+            }
+            if (birthdayList != null) {
+                birthdayList.setBackground(currentTheme.inputBackground);
+                birthdayList.setForeground(currentTheme.textMain);
+                birthdayList.repaint();
+            }
+            if (birthdaysCountLabel != null) {
+                birthdaysCountLabel.setForeground(currentTheme.primary);
+            }
+            if (detailPanel != null) {
+                detailPanel.repaint();
+                if (selectedBirthdayForDetail != null) {
+                    updateBirthdayDetail();
+                }
+            }
+            
+            // Update Global UI Defaults for Popups/Menus to match the theme
+            UIManager.put("PopupMenu.background", currentTheme.cardBackground);
+            UIManager.put("PopupMenu.border", BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(currentTheme.primary, 1),
+                BorderFactory.createEmptyBorder(2, 2, 2, 2)));
+            UIManager.put("Menu.background", currentTheme.cardBackground);
+            UIManager.put("Menu.foreground", currentTheme.textMain);
+            UIManager.put("MenuItem.background", currentTheme.cardBackground);
+            UIManager.put("MenuItem.foreground", currentTheme.textMain);
+            UIManager.put("MenuItem.selectionBackground", new Color(currentTheme.primary.getRed(), currentTheme.primary.getGreen(), currentTheme.primary.getBlue(), 180));
+            UIManager.put("MenuItem.selectionForeground", Color.WHITE);
+            UIManager.put("MenuItem.font", FONT_BODY);
+            UIManager.put("MenuItem.border", BorderFactory.createEmptyBorder(10, 15, 10, 15));
+            
+            UIManager.put("ToolTip.background", currentTheme.cardBackground);
+            UIManager.put("ToolTip.foreground", currentTheme.textMain);
+            UIManager.put("ToolTip.border", BorderFactory.createLineBorder(currentTheme.primary, 1));
+            
+            UIManager.put("OptionPane.background", currentTheme.cardBackground);
+            UIManager.put("OptionPane.messageForeground", currentTheme.textMain);
+            
+            // Update existing components if necessary
+            SwingUtilities.updateComponentTreeUI(this);
+            
+            mainPanel.repaint();
+            centerPanel.repaint();
+            if (birthdayCard != null) {
+                birthdayCard.repaint();
+            }
+            resultsPanel.repaint();
+        });
     }
 
-    private void styleResultsScrollPane() {
-        if (resultsScrollPane == null) {
-            return;
-        }
+    private JPanel createEmptyStatePanel() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setOpaque(false);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        gbc.insets = new Insets(10, 20, 10, 20);
 
-        resultsScrollPane.setBorder(BorderFactory.createEmptyBorder());
-        resultsScrollPane.setBackground(currentTheme.inputBackground);
-        resultsScrollPane.getViewport().setBackground(currentTheme.inputBackground);
-        resultsScrollPane.getViewport().setOpaque(true);
-        resultsScrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
-        resultsScrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        JLabel title = new JLabel("Čekám na datum narození");
+        title.setFont(new Font(UI_FONT, Font.BOLD, 22));
+        title.setForeground(currentTheme.textMain);
+        title.setHorizontalAlignment(SwingConstants.CENTER);
+        panel.add(title, gbc);
 
-        JScrollBar verticalBar = resultsScrollPane.getVerticalScrollBar();
-        verticalBar.setPreferredSize(new Dimension(12, 0));
-        verticalBar.setOpaque(false);
-        verticalBar.setUnitIncrement(18);
-        verticalBar.setUI(new ModernScrollBarUI(currentTheme));
+        gbc.gridy++;
+        JLabel desc = new JLabel("<html><center>Zadejte datum ve formátu <b>dd.mm.yyyy</b> a výsledek se zobrazí jako přehledný moderní panel.</center></html>");
+        desc.setFont(FONT_BODY);
+        desc.setForeground(currentTheme.textMuted);
+        desc.setHorizontalAlignment(SwingConstants.CENTER);
+        panel.add(desc, gbc);
+
+        gbc.gridy++;
+        JPanel tipBox = new JPanel(new BorderLayout()) {
+            @Override
+            protected void paintComponent(Graphics g) {
+                super.paintComponent(g);
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(currentTheme.inputBackground);
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 10, 10);
+                g2.setColor(currentTheme.primary.darker());
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 10, 10);
+                g2.dispose();
+            }
+        };
+        tipBox.setOpaque(false);
+        tipBox.setBorder(BorderFactory.createEmptyBorder(12, 16, 12, 16));
+        JLabel tipLabel = new JLabel("Tip: můžete použít například 15.03.2000.");
+        tipLabel.setFont(FONT_BODY_BOLD);
+        tipLabel.setForeground(currentTheme.textMuted);
+        tipLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        tipBox.add(tipLabel, BorderLayout.CENTER);
+        
+        JPanel tipWrapper = new JPanel(new FlowLayout(FlowLayout.CENTER));
+        tipWrapper.setOpaque(false);
+        tipWrapper.add(tipBox);
+        
+        panel.add(tipWrapper, gbc);
+
+        return panel;
+    }
+
+    private JPanel createDashboardPanel() {
+        JPanel panel = new JPanel(new GridBagLayout());
+        panel.setOpaque(false);
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(4, 4, 4, 4);
+
+        headerCard = new HeaderCard();
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.gridwidth = 4;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        panel.add(headerCard, gbc);
+
+        // Row 1
+        gbc.gridy = 1;
+        gbc.gridwidth = 1;
+        gbc.weightx = 0.25;
+        gbc.fill = GridBagConstraints.BOTH;
+        
+        cardBirthDate = new MetricCard("Datum narození", "");
+        gbc.gridx = 0;
+        panel.add(cardBirthDate, gbc);
+
+        cardZodiac = new MetricCard("Znamení zvěrokruhu", "");
+        gbc.gridx = 1;
+        panel.add(cardZodiac, gbc);
+
+        cardTodayDate = new MetricCard("Dnešní datum", "");
+        gbc.gridx = 2;
+        panel.add(cardTodayDate, gbc);
+
+        cardMonthsTotal = new MetricCard("Měsíců celkem", "");
+        gbc.gridx = 3;
+        panel.add(cardMonthsTotal, gbc);
+
+        // Row 2
+        gbc.gridy = 2;
+        
+        cardNextBirthday = new MetricCard("Příští narozeniny", "");
+        gbc.gridx = 0;
+        panel.add(cardNextBirthday, gbc);
+
+        cardCountdown = new MetricCard("Odpočet", "");
+        gbc.gridx = 1;
+        panel.add(cardCountdown, gbc);
+
+        cardDaysTotal = new MetricCard("Dní celkem", "");
+        gbc.gridx = 2;
+        panel.add(cardDaysTotal, gbc);
+
+        cardHoursTotal = new MetricCard("Hodin celkem", "");
+        gbc.gridx = 3;
+        panel.add(cardHoursTotal, gbc);
+
+        // Row 3
+        gbc.gridy = 3;
+        
+        cardMinutesTotal = new MetricCard("Minut celkem", "");
+        gbc.gridx = 0;
+        gbc.gridwidth = 2;
+        gbc.weightx = 0.5;
+        panel.add(cardMinutesTotal, gbc);
+
+        cardSecondsTotal = new MetricCard("Sekund celkem", "");
+        gbc.gridx = 2;
+        gbc.gridwidth = 2;
+        gbc.weightx = 0.5;
+        panel.add(cardSecondsTotal, gbc);
+
+        // System time label
+        gbc.gridy = 4;
+        gbc.gridx = 0;
+        gbc.gridwidth = 4;
+        gbc.weightx = 1.0;
+        gbc.insets = new Insets(15, 4, 4, 4); // Add spacing above the label
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        liveTimeLabel = new JLabel("Živě podle systémového času: --:--:--");
+        liveTimeLabel.setFont(new Font(UI_FONT, Font.BOLD, 13));
+        liveTimeLabel.setForeground(new Color(255, 255, 255, 200));
+        liveTimeLabel.setHorizontalAlignment(SwingConstants.CENTER);
+        panel.add(liveTimeLabel, gbc);
+
+        return panel;
     }
 
     private void startRealtimeUpdates() {
         realtimeTimer = new Timer(1000, e -> {
             if (lastBirthDate != null) {
-                renderResults(lastBirthDate, false);
+                renderResults(lastBirthDate, false, true);
             }
         });
         realtimeTimer.setInitialDelay(1000);
@@ -951,14 +2005,14 @@ public class BirthCalculator extends JFrame {
 
     private void loadHistory() {
         updatingHistory = true;
-        historyCombo.removeAllItems();
-
-        for (String date : getHistoryDates()) {
-            historyCombo.addItem(date);
+        java.util.List<String> dates = getHistoryDates();
+        if (dates.isEmpty()) {
+            historyButton.setText("Vyberte z historie");
+        } else {
+            historyButton.setText(dates.get(0));
         }
-
         updatingHistory = false;
-        removeHistoryButton.setEnabled(historyCombo.getItemCount() > 0);
+        removeHistoryButton.setEnabled(!dates.isEmpty());
     }
 
     private java.util.List<String> getHistoryDates() {
@@ -996,7 +2050,7 @@ public class BirthCalculator extends JFrame {
         saveHistoryDates(dates);
         loadHistory();
         updatingHistory = true;
-        historyCombo.setSelectedItem(formattedDate);
+        historyButton.setText(formattedDate);
         updatingHistory = false;
     }
 
@@ -1010,26 +2064,27 @@ public class BirthCalculator extends JFrame {
         LocalDate birthDate = validateDate(dates.get(0));
         if (birthDate != null) {
             lastBirthDate = birthDate;
-            renderResults(birthDate, true);
+            renderResults(birthDate, true, false);
         }
     }
 
     private void selectHistoryDate() {
-        if (updatingHistory || historyCombo.getSelectedItem() == null) {
+        if (updatingHistory) return;
+        String selected = historyButton.getText();
+        if (selected == null || selected.isEmpty() || selected.equals("Vyberte z historie")) {
             return;
         }
 
-        dateField.setText(historyCombo.getSelectedItem().toString());
+        dateField.setText(selected);
         calculateAge();
     }
 
     private void removeSelectedHistoryDate() {
-        Object selectedItem = historyCombo.getSelectedItem();
-        if (selectedItem == null) {
+        String selectedDate = historyButton.getText();
+        if (selectedDate == null || selectedDate.isEmpty() || selectedDate.equals("Vyberte z historie")) {
             return;
         }
 
-        String selectedDate = selectedItem.toString();
         java.util.List<String> dates = new ArrayList<>();
         for (String date : getHistoryDates()) {
             if (!date.equals(selectedDate)) {
@@ -1043,6 +2098,68 @@ public class BirthCalculator extends JFrame {
         if (selectedDate.equals(dateField.getText().trim())) {
             clear();
         }
+    }
+
+    private void showHistoryMenu() {
+        JPopupMenu menu = new JPopupMenu() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(currentTheme.cardBackground);
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 24, 24);
+                g2.setColor(new Color(255, 255, 255, 40));
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 24, 24);
+                g2.dispose();
+            }
+            @Override
+            protected void paintChildren(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.clip(new java.awt.geom.RoundRectangle2D.Float(0, 0, getWidth(), getHeight(), 24, 24));
+                super.paintChildren(g2);
+                g2.dispose();
+            }
+        };
+        menu.setOpaque(false);
+        menu.setBackground(new Color(0, 0, 0, 0));
+        menu.setBorder(BorderFactory.createEmptyBorder(12, 6, 12, 6));
+        
+        java.util.List<String> history = getHistoryDates();
+        if (history.isEmpty()) {
+            JMenuItem empty = new JMenuItem("Žádná historie");
+            empty.setEnabled(false);
+            empty.setFont(FONT_BODY);
+            empty.setForeground(currentTheme.textMuted);
+            empty.setBackground(currentTheme.cardBackground);
+            menu.add(empty);
+        } else {
+            for (String date : history) {
+                JMenuItem item = new JMenuItem(date);
+                item.setOpaque(true);
+                item.setFont(FONT_BODY_BOLD);
+                item.setBackground(currentTheme.cardBackground);
+                item.setForeground(currentTheme.textMain);
+                item.setBorder(BorderFactory.createEmptyBorder(8, 20, 8, 20));
+                
+                item.addChangeListener(e -> {
+                    if (item.isArmed()) {
+                        item.setBackground(currentTheme.primary);
+                        item.setForeground(Color.WHITE);
+                    } else {
+                        item.setBackground(currentTheme.cardBackground);
+                        item.setForeground(currentTheme.textMain);
+                    }
+                });
+                
+                item.addActionListener(e -> {
+                    historyButton.setText(date);
+                    selectHistoryDate();
+                });
+                menu.add(item);
+            }
+        }
+        menu.show(historyButton, 0, historyButton.getHeight() + 4);
     }
 
     private void loadBirthdayEntries() {
@@ -1103,12 +2220,14 @@ public class BirthCalculator extends JFrame {
             return;
         }
 
-        cardsLayout.show(cardsPanel, "BIRTHDAYS");
-        if (birthdayNameField != null) {
-            birthdayNameField.requestFocus();
-        }
-        refreshBirthdayListModel();
-        updateBirthdaySummary();
+        crossfadeAnimation(() -> {
+            cardsLayout.show(cardsPanel, "BIRTHDAYS");
+            if (birthdayNameField != null) {
+                birthdayNameField.requestFocus();
+            }
+            refreshBirthdayListModel();
+            updateBirthdaySummary();
+        });
     }
 
     private void showCalculatorView() {
@@ -1116,32 +2235,17 @@ public class BirthCalculator extends JFrame {
             return;
         }
 
-        cardsLayout.show(cardsPanel, "CALCULATOR");
-        if (dateField != null) {
-            dateField.requestFocus();
-        }
+        crossfadeAnimation(() -> {
+            cardsLayout.show(cardsPanel, "CALCULATOR");
+            if (dateField != null) {
+                dateField.requestFocus();
+            }
+        });
     }
 
     private JPanel createBirthdayCard() {
-        JPanel birthdayRoot = new JPanel(new BorderLayout(15, 15)) {
-            @Override
-            protected void paintComponent(Graphics g) {
-                super.paintComponent(g);
-                Graphics2D g2 = (Graphics2D) g;
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-
-                GradientPaint gradient = new GradientPaint(0, 0, currentTheme.backgroundTop,
-                    getWidth(), getHeight(), currentTheme.backgroundBottom);
-                g2.setPaint(gradient);
-                g2.fillRect(0, 0, getWidth(), getHeight());
-
-                g2.setColor(currentTheme.glow);
-                int[] bandX = {getWidth(), 0, 0, getWidth()};
-                int[] bandY = {58, 90, 0, 18};
-                g2.fillPolygon(bandX, bandY, 4);
-            }
-        };
-        birthdayRoot.setOpaque(true);
+        JPanel birthdayRoot = new JPanel(new BorderLayout(15, 15));
+        birthdayRoot.setOpaque(false);
         birthdayRoot.setBorder(BorderFactory.createEmptyBorder(0, 0, 0, 0));
 
         JPanel outer = new JPanel(new BorderLayout(15, 15));
@@ -1172,7 +2276,7 @@ public class BirthCalculator extends JFrame {
         birthdaysCountLabel.setFont(FONT_BODY_BOLD);
         birthdaysCountLabel.setForeground(currentTheme.primary);
 
-        birthdaysBackButton = createIconButton("←", currentTheme.accent, currentTheme.accent.brighter());
+        birthdaysBackButton = createIconButton(VectorIcon.Type.ARROW_LEFT, currentTheme.accent, currentTheme.accent.brighter());
         birthdaysBackButton.addActionListener(e -> showCalculatorView());
 
         JPanel headerActions = new JPanel(new FlowLayout(FlowLayout.RIGHT, 10, 0));
@@ -1192,13 +2296,7 @@ public class BirthCalculator extends JFrame {
             protected void paintComponent(Graphics g) {
                 super.paintComponent(g);
                 Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(new Color(0, 0, 0, 18));
-                g2.fillRoundRect(8, 8, getWidth() - 10, getHeight() - 10, 18, 18);
-                g2.setColor(currentTheme.cardBackground);
-                g2.fillRoundRect(0, 0, getWidth() - 8, getHeight() - 8, 18, 18);
-                g2.setPaint(new GradientPaint(16, 0, currentTheme.secondary, Math.max(120, getWidth() / 2), 0, currentTheme.primary));
-                g2.fillRoundRect(16, 12, Math.max(88, getWidth() / 4), 4, 4, 4);
+                paintLiquidGlass(g2, getWidth() - 8, getHeight() - 8, 28, false);
                 g2.dispose();
             }
         };
@@ -1218,15 +2316,26 @@ public class BirthCalculator extends JFrame {
         form.gridwidth = 2;
         formCard.add(nameLabel, form);
 
-        birthdayNameField = new JTextField();
+        birthdayNameField = new JTextField() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(new Color(0, 0, 0, 45));
+                g2.fillRoundRect(0, 4, getWidth(), getHeight() - 2, getHeight(), getHeight());
+                g2.setColor(new Color(0, 0, 0, 40));
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), getHeight(), getHeight());
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        birthdayNameField.setOpaque(false);
         birthdayNameField.setFont(FONT_BODY_BOLD);
-        birthdayNameField.setPreferredSize(new Dimension(260, 40));
-        birthdayNameField.setBackground(currentTheme.inputBackground);
-        birthdayNameField.setForeground(currentTheme.textMain);
-        birthdayNameField.setCaretColor(currentTheme.primary);
-        birthdayNameField.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(currentTheme.primary.darker(), 2),
-            BorderFactory.createEmptyBorder(9, 12, 9, 12)));
+        birthdayNameField.setPreferredSize(new Dimension(260, 48));
+        birthdayNameField.setForeground(Color.WHITE);
+        birthdayNameField.setCaretColor(Color.WHITE);
+        birthdayNameField.setHorizontalAlignment(JTextField.CENTER);
+        birthdayNameField.setBorder(new PillBorder(new Color(255, 255, 255, 120), 1));
         form.gridy = 1;
         formCard.add(birthdayNameField, form);
 
@@ -1245,19 +2354,30 @@ public class BirthCalculator extends JFrame {
         birthdayDateConstraints.weightx = 1.0;
         birthdayDateConstraints.fill = GridBagConstraints.HORIZONTAL;
 
-        birthdayDateField = new JTextField();
+        birthdayDateField = new JTextField() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(new Color(0, 0, 0, 45));
+                g2.fillRoundRect(0, 4, getWidth(), getHeight() - 2, getHeight(), getHeight());
+                g2.setColor(new Color(0, 0, 0, 40));
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), getHeight(), getHeight());
+                g2.dispose();
+                super.paintComponent(g);
+            }
+        };
+        birthdayDateField.setOpaque(false);
         birthdayDateField.setFont(FONT_BODY_BOLD);
-        birthdayDateField.setPreferredSize(new Dimension(260, 40));
+        birthdayDateField.setPreferredSize(new Dimension(260, 48));
         birthdayDateField.setToolTipText("Například 15.03.2000");
-        birthdayDateField.setBackground(currentTheme.inputBackground);
-        birthdayDateField.setForeground(currentTheme.textMain);
-        birthdayDateField.setCaretColor(currentTheme.primary);
-        birthdayDateField.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(currentTheme.primary.darker(), 2),
-            BorderFactory.createEmptyBorder(9, 12, 9, 12)));
+        birthdayDateField.setForeground(Color.WHITE);
+        birthdayDateField.setCaretColor(Color.WHITE);
+        birthdayDateField.setHorizontalAlignment(JTextField.CENTER);
+        birthdayDateField.setBorder(new PillBorder(new Color(255, 255, 255, 120), 1));
         birthdayDateRow.add(birthdayDateField, birthdayDateConstraints);
 
-        birthdayPickDateButton = createIconButton("📅", currentTheme.primary, currentTheme.secondary);
+        birthdayPickDateButton = createIconButton(VectorIcon.Type.CALENDAR, currentTheme.primary, currentTheme.secondary);
         birthdayPickDateButton.setToolTipText("Vyber z kalendáře");
         birthdayPickDateButton.addActionListener(e -> showCalendarDialog(
             birthdayDateField,
@@ -1272,12 +2392,12 @@ public class BirthCalculator extends JFrame {
 
         JPanel actionRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 10, 0));
         actionRow.setOpaque(false);
-        birthdayAddButton = createIconButton("➕", currentTheme.primary, currentTheme.secondary);
+        birthdayAddButton = createIconButton(VectorIcon.Type.PLUS, currentTheme.primary, currentTheme.secondary);
         birthdayAddButton.setToolTipText("Přidat narozeniny");
         birthdayAddButton.addActionListener(e -> addBirthdayEntry());
         actionRow.add(birthdayAddButton);
 
-        birthdayRemoveButton = createIconButton("✕", currentTheme.accent, currentTheme.accent.brighter());
+        birthdayRemoveButton = createIconButton(VectorIcon.Type.CLOSE, currentTheme.accent, currentTheme.accent.brighter());
         birthdayRemoveButton.setToolTipText("Odstranit");
         birthdayRemoveButton.addActionListener(e -> removeSelectedBirthdayEntry());
         actionRow.add(birthdayRemoveButton);
@@ -1296,13 +2416,7 @@ public class BirthCalculator extends JFrame {
             protected void paintComponent(Graphics g) {
                 super.paintComponent(g);
                 Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(new Color(0, 0, 0, 18));
-                g2.fillRoundRect(8, 8, getWidth() - 10, getHeight() - 10, 18, 18);
-                g2.setColor(currentTheme.cardBackground);
-                g2.fillRoundRect(0, 0, getWidth() - 8, getHeight() - 8, 18, 18);
-                g2.setPaint(new GradientPaint(16, 0, currentTheme.primary, Math.max(120, getWidth() / 2), 0, currentTheme.secondary));
-                g2.fillRoundRect(16, 12, Math.max(88, getWidth() / 4), 4, 4, 4);
+                paintLiquidGlass(g2, getWidth() - 8, getHeight() - 8, 28, false);
                 g2.dispose();
             }
         };
@@ -1319,22 +2433,56 @@ public class BirthCalculator extends JFrame {
         birthdayList.setFont(FONT_BODY);
         birthdayList.setSelectionMode(ListSelectionModel.SINGLE_SELECTION);
         birthdayList.setCellRenderer((list, value, index, isSelected, cellHasFocus) -> {
-            JLabel label = new JLabel();
-            label.setOpaque(true);
-            label.setBorder(BorderFactory.createEmptyBorder(14, 16, 14, 16));
+            JPanel panel = new JPanel(new BorderLayout()) {
+                @Override
+                protected void paintComponent(Graphics g) {
+                    Graphics2D g2 = (Graphics2D) g.create();
+                    g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                    
+                    int w = getWidth() - 8;
+                    int h = getHeight() - 8;
+                    
+                    if (isSelected) {
+                        g2.setColor(currentTheme.primary);
+                        g2.fillRoundRect(4, 4, w, h, h, h);
+                        
+                        if (currentTheme.name.startsWith("Test")) {
+                            GradientPaint sheen = new GradientPaint(
+                                0, 4, new Color(255, 255, 255, 60),
+                                0, 4 + h / 2, new Color(255, 255, 255, 0)
+                            );
+                            g2.setPaint(sheen);
+                            g2.fillRoundRect(4, 4, w, h, h, h);
+                        }
+                    } else {
+                        g2.setColor(new Color(128, 128, 128, 20));
+                        g2.fillRoundRect(4, 4, w, h, h, h);
+                        g2.setColor(new Color(255, 255, 255, 20));
+                        g2.drawRoundRect(4, 4, w, h, h, h);
+                    }
+                    g2.dispose();
+                }
+            };
+            panel.setOpaque(false);
+            
+            JLabel label = new JLabel(value.toString());
+            label.setOpaque(false);
+            label.setBorder(BorderFactory.createEmptyBorder(14, 20, 14, 20));
             label.setFont(FONT_BODY_BOLD);
-            label.setText(value.toString());
-
+            
             if (isSelected) {
-                label.setBackground(currentTheme.secondary);
                 label.setForeground(Color.WHITE);
             } else {
-                label.setBackground(index % 2 == 0 ? currentTheme.inputBackground : currentTheme.cardBackground);
                 label.setForeground(currentTheme.textMain);
             }
-
-            return label;
+            
+            panel.add(label, BorderLayout.CENTER);
+            return panel;
         });
+        
+        birthdayList.setOpaque(false);
+        birthdayList.setBackground(new Color(0, 0, 0, 0));
+        birthdayList.setSelectionBackground(new Color(0, 0, 0, 0));
         birthdayList.addListSelectionListener(e -> {
             if (birthdayList.getSelectedValue() != null) {
                 selectedBirthdayForDetail = birthdayList.getSelectedValue();
@@ -1344,28 +2492,27 @@ public class BirthCalculator extends JFrame {
 
         JScrollPane birthdayScrollPane = new JScrollPane(birthdayList);
         birthdayScrollPane.setBorder(BorderFactory.createEmptyBorder());
-        birthdayScrollPane.setBackground(currentTheme.inputBackground);
-        birthdayScrollPane.getViewport().setBackground(currentTheme.inputBackground);
-        birthdayScrollPane.setPreferredSize(new Dimension(420, 350));
+        birthdayScrollPane.setOpaque(false);
+        birthdayScrollPane.getViewport().setOpaque(false);
+        birthdayScrollPane.setBackground(new Color(0, 0, 0, 0));
+        birthdayScrollPane.getViewport().setBackground(new Color(0, 0, 0, 0));
+        birthdayScrollPane.setPreferredSize(new Dimension(300, 200));
         birthdayScrollPane.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
         birthdayScrollPane.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
+        birthdayScrollPane.getVerticalScrollBar().setPreferredSize(new Dimension(5, 0));
         birthdayScrollPane.getVerticalScrollBar().setUI(new ModernScrollBarUI(currentTheme));
+        enableSmoothScrolling(birthdayScrollPane);
         listCard.add(birthdayScrollPane, BorderLayout.CENTER);
 
-        JPanel listWithDetailPanel = new JPanel(new BorderLayout(10, 0)) {
-            @Override
-            protected void paintComponent(Graphics g) {
-                super.paintComponent(g);
-            }
-        };
-        listWithDetailPanel.setOpaque(false);
-        listWithDetailPanel.add(listCard, BorderLayout.WEST);
-        
-        detailPanel = createBirthdayDetailPanel();
-        listWithDetailPanel.add(detailPanel, BorderLayout.CENTER);
+        JPanel leftColumn = new JPanel(new BorderLayout(0, 15));
+        leftColumn.setOpaque(false);
+        leftColumn.add(formCard, BorderLayout.NORTH);
+        leftColumn.add(listCard, BorderLayout.CENTER);
 
-        contentPanel.add(formCard, BorderLayout.WEST);
-        contentPanel.add(listWithDetailPanel, BorderLayout.CENTER);
+        detailPanel = createBirthdayDetailPanel();
+
+        contentPanel.add(leftColumn, BorderLayout.WEST);
+        contentPanel.add(detailPanel, BorderLayout.CENTER);
 
         outer.add(headerPanel, BorderLayout.NORTH);
         outer.add(contentPanel, BorderLayout.CENTER);
@@ -1485,10 +2632,10 @@ public class BirthCalculator extends JFrame {
         }
     }
     
-    private GradientButton createIconButton(String icon, Color color1, Color color2) {
-        GradientButton btn = new GradientButton(icon, color1, color2);
+    private GradientButton createIconButton(VectorIcon.Type iconType, Color color1, Color color2) {
+        GradientButton btn = new GradientButton("", color1, color2);
         btn.setPreferredSize(new Dimension(52, 52));
-        btn.setFont(new Font(UI_FONT, Font.BOLD, 20));
+        btn.setIcon(new VectorIcon(iconType, 20, 20, Color.WHITE));
         return btn;
     }
 
@@ -1502,13 +2649,7 @@ public class BirthCalculator extends JFrame {
             protected void paintComponent(Graphics g) {
                 super.paintComponent(g);
                 Graphics2D g2 = (Graphics2D) g.create();
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                g2.setColor(new Color(0, 0, 0, 18));
-                g2.fillRoundRect(8, 8, getWidth() - 10, getHeight() - 10, 18, 18);
-                g2.setColor(currentTheme.cardBackground);
-                g2.fillRoundRect(0, 0, getWidth() - 8, getHeight() - 8, 18, 18);
-                g2.setPaint(new GradientPaint(16, 0, currentTheme.primary, Math.max(120, getWidth() / 2), 0, currentTheme.secondary));
-                g2.fillRoundRect(16, 12, Math.max(88, getWidth() / 4), 4, 4, 4);
+                paintLiquidGlass(g2, getWidth() - 8, getHeight() - 8, 28, false);
                 g2.dispose();
             }
         };
@@ -1522,50 +2663,44 @@ public class BirthCalculator extends JFrame {
         emptyLabel.setForeground(currentTheme.textMuted);
         emptyState.add(emptyLabel);
 
-        JPanel detailContent = new JPanel();
-        detailContent.setLayout(new BoxLayout(detailContent, BoxLayout.Y_AXIS));
+        JPanel detailContent = new JPanel(new GridBagLayout());
         detailContent.setOpaque(false);
         detailContent.setBorder(BorderFactory.createEmptyBorder(6, 0, 6, 0));
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.insets = new Insets(4, 4, 4, 4);
 
-        detailNameLabel = new JLabel();
-        detailNameLabel.setFont(new Font(UI_FONT, Font.BOLD, 20));
-        detailNameLabel.setForeground(currentTheme.textMain);
-        detailNameLabel.setBorder(BorderFactory.createEmptyBorder(4, 0, 8, 0));
-        detailContent.add(detailNameLabel);
+        friendHeaderCard = new HeaderCard();
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.gridwidth = 2;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.weightx = 1.0;
+        detailContent.add(friendHeaderCard, gbc);
 
-        detailBirthdateLabel = new JLabel();
-        detailBirthdateLabel.setFont(FONT_BODY);
-        detailBirthdateLabel.setForeground(currentTheme.textMuted);
-        detailBirthdateLabel.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
-        detailContent.add(detailBirthdateLabel);
+        gbc.gridy = 1;
+        gbc.gridwidth = 1;
+        gbc.weightx = 0.5;
+        gbc.fill = GridBagConstraints.BOTH;
 
-        detailAgeLabel = new JLabel();
-        detailAgeLabel.setFont(FONT_BODY);
-        detailAgeLabel.setForeground(currentTheme.textMuted);
-        detailAgeLabel.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
-        detailContent.add(detailAgeLabel);
+        friendNextBirthdayCard = new MetricCard("Příští narozeniny", "");
+        gbc.gridx = 0;
+        detailContent.add(friendNextBirthdayCard, gbc);
 
-        detailCountdownLabel = new JLabel();
-        detailCountdownLabel.setFont(FONT_BODY);
-        detailCountdownLabel.setForeground(currentTheme.secondary);
-        detailCountdownLabel.setBorder(BorderFactory.createEmptyBorder(4, 0, 4, 0));
-        detailContent.add(detailCountdownLabel);
-        
-        detailContent.add(Box.createVerticalGlue());
+        friendCountdownCard = new MetricCard("Odpočet", "");
+        gbc.gridx = 1;
+        detailContent.add(friendCountdownCard, gbc);
 
-        JScrollPane detailScroll = new JScrollPane(detailContent);
-        detailScroll.setBorder(BorderFactory.createEmptyBorder());
-        detailScroll.setBackground(currentTheme.cardBackground);
-        detailScroll.getViewport().setBackground(currentTheme.cardBackground);
-        detailScroll.setVerticalScrollBarPolicy(ScrollPaneConstants.VERTICAL_SCROLLBAR_AS_NEEDED);
-        detailScroll.setHorizontalScrollBarPolicy(ScrollPaneConstants.HORIZONTAL_SCROLLBAR_NEVER);
-        detailScroll.getVerticalScrollBar().setUI(new ModernScrollBarUI(currentTheme));
+        gbc.gridy = 2;
+        gbc.gridx = 0;
+        gbc.gridwidth = 2;
+        gbc.weighty = 1.0;
+        detailContent.add(Box.createGlue(), gbc);
 
         CardLayout detailLayout = new CardLayout();
         JPanel detailCards = new JPanel(detailLayout);
         detailCards.setOpaque(false);
         detailCards.add(emptyState, "EMPTY");
-        detailCards.add(detailScroll, "DETAIL");
+        detailCards.add(detailContent, "DETAIL");
         
         detailRoot.add(detailCards, BorderLayout.CENTER);
         detailRoot.putClientProperty("detailLayout", detailLayout);
@@ -1586,13 +2721,15 @@ public class BirthCalculator extends JFrame {
         long daysUntilBirthday = ChronoUnit.DAYS.between(today, nextBirthday);
         Period age = Period.between(selectedBirthdayForDetail.birthDate, today);
 
-        detailNameLabel.setText(selectedBirthdayForDetail.name);
-        detailBirthdateLabel.setText("📅 " + selectedBirthdayForDetail.birthDate.format(DATE_FORMATTER));
-        detailAgeLabel.setText(String.format("🎂 %d let", age.getYears()));
+        friendHeaderCard.updateAll(
+            "NAROZENINY PŘÍTELE", 
+            selectedBirthdayForDetail.name, 
+            String.format("Věk: %d let (Narozen: %s)", age.getYears(), selectedBirthdayForDetail.birthDate.format(DATE_FORMATTER))
+        );
         
-        String countdownText = daysUntilBirthday == 0 ? "Dnes!" : String.format("Za %,d dní", daysUntilBirthday);
-        detailCountdownLabel.setText(String.format("⏳ %s (%s)", 
-            nextBirthday.format(DATE_FORMATTER), countdownText));
+        String countdownText = daysUntilBirthday == 0 ? "Dnes!" : String.format("za %,d dní", daysUntilBirthday);
+        friendNextBirthdayCard.setValue(nextBirthday.format(DATE_FORMATTER));
+        friendCountdownCard.setValue(countdownText);
 
         CardLayout detailLayout = (CardLayout) detailPanel.getClientProperty("detailLayout");
         if (detailLayout != null) {
@@ -1600,29 +2737,180 @@ public class BirthCalculator extends JFrame {
         }
     }
 
-    private void showThemeMenu(JButton button) {
-        JPopupMenu themeMenu = new JPopupMenu();
-        for (int i = 0; i < THEMES.length; i++) {
-            final int themeIndex = i;
-            Theme t = THEMES[i];
-            JMenuItem item = new JMenuItem(t.name);
-            item.addActionListener(e -> applyTheme(themeIndex));
-            themeMenu.add(item);
+    private class InteractiveThemeItem extends JPanel {
+        private final Theme theme;
+        private final int index;
+        private final JPopupMenu parentMenu;
+        private float hoverProgress = 0f;
+        private javax.swing.Timer hoverTimer;
+        private boolean isHovered = false;
+
+        public InteractiveThemeItem(Theme theme, int index, JPopupMenu parentMenu) {
+            this.theme = theme;
+            this.index = index;
+            this.parentMenu = parentMenu;
+            setPreferredSize(new Dimension(190, 46));
+            setOpaque(false);
+            setCursor(new Cursor(Cursor.HAND_CURSOR));
+
+            addMouseListener(new MouseAdapter() {
+                @Override
+                public void mouseEntered(MouseEvent e) {
+                    isHovered = true;
+                    animateHover();
+                }
+                @Override
+                public void mouseExited(MouseEvent e) {
+                    isHovered = false;
+                    animateHover();
+                }
+                @Override
+                public void mouseReleased(MouseEvent e) {
+                    if (isHovered) {
+                        parentMenu.setVisible(false);
+                        applyTheme(index);
+                    }
+                }
+            });
         }
-        themeMenu.show(button, 0, button.getHeight());
+
+        private void animateHover() {
+            if (hoverTimer != null && hoverTimer.isRunning()) {
+                hoverTimer.stop();
+            }
+            hoverTimer = new javax.swing.Timer(16, e -> {
+                if (isHovered && hoverProgress < 1f) {
+                    hoverProgress += 0.15f;
+                } else if (!isHovered && hoverProgress > 0f) {
+                    hoverProgress -= 0.15f;
+                } else {
+                    ((javax.swing.Timer)e.getSource()).stop();
+                }
+                hoverProgress = Math.max(0f, Math.min(1f, hoverProgress));
+                repaint();
+            });
+            hoverTimer.start();
+        }
+
+        @Override
+        protected void paintComponent(Graphics g) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+
+            int w = getWidth();
+            int h = getHeight();
+
+            float scale = 1.0f + (hoverProgress * 0.06f); // 6% zoom
+            
+            g2.translate(w/2, h/2);
+            g2.scale(scale, scale);
+            g2.translate(-w/2, -h/2);
+
+            if (hoverProgress > 0) {
+                g2.setColor(new Color(0, 0, 0, (int)(hoverProgress * 40)));
+                g2.fillRoundRect(8, 8, w - 16, h - 10, 14, 14); // shadow
+            }
+
+            int bgAlpha = (int)(hoverProgress * 50);
+            g2.setColor(new Color(theme.primary.getRed(), theme.primary.getGreen(), theme.primary.getBlue(), bgAlpha));
+            g2.fillRoundRect(8, 4, w - 16, h - 8, 14, 14);
+
+            int swatchX = 22;
+            int swatchY = h/2 - 8;
+            GradientPaint gp = new GradientPaint(swatchX, swatchY, theme.primary, swatchX + 16, swatchY + 16, theme.secondary);
+            g2.setPaint(gp);
+            g2.fillOval(swatchX, swatchY, 16, 16);
+            g2.setColor(new Color(255, 255, 255, 100));
+            g2.drawOval(swatchX, swatchY, 16, 16);
+
+            g2.setFont(FONT_BODY_BOLD);
+            if (hoverProgress > 0) {
+                // slightly brighter text on hover
+                int r = Math.min(255, currentTheme.textMain.getRed() + (int)(hoverProgress * 30));
+                int gr = Math.min(255, currentTheme.textMain.getGreen() + (int)(hoverProgress * 30));
+                int b = Math.min(255, currentTheme.textMain.getBlue() + (int)(hoverProgress * 30));
+                g2.setColor(new Color(r, gr, b));
+            } else {
+                g2.setColor(currentTheme.textMain);
+            }
+            
+            FontMetrics fm = g2.getFontMetrics();
+            int textY = h/2 + fm.getAscent()/2 - 1;
+            g2.drawString(theme.name, swatchX + 30, textY);
+
+            g2.dispose();
+        }
+    }
+
+    private void showThemeMenu(JButton button) {
+        JPopupMenu themeMenu = new JPopupMenu() {
+            @Override
+            protected void paintComponent(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(currentTheme.cardBackground);
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), 24, 24);
+                g2.setColor(new Color(255, 255, 255, 40));
+                g2.drawRoundRect(0, 0, getWidth() - 1, getHeight() - 1, 24, 24);
+                g2.dispose();
+            }
+            @Override
+            protected void paintChildren(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.clip(new java.awt.geom.RoundRectangle2D.Float(0, 0, getWidth(), getHeight(), 24, 24));
+                super.paintChildren(g2);
+                g2.dispose();
+            }
+        };
+        themeMenu.setOpaque(false);
+        themeMenu.setBackground(new Color(0, 0, 0, 0));
+        themeMenu.setBorder(BorderFactory.createEmptyBorder(12, 6, 12, 6));
+        for (int i = 0; i < THEMES.length; i++) {
+            themeMenu.add(new InteractiveThemeItem(THEMES[i], i, themeMenu));
+        }
+        themeMenu.show(button, 0, button.getHeight() + 4);
+    }
+
+    private class PillBorder implements javax.swing.border.Border {
+        private final Color color;
+        private final int thickness;
+
+        PillBorder(Color color, int thickness) {
+            this.color = color;
+            this.thickness = thickness;
+        }
+
+        @Override
+        public void paintBorder(Component c, Graphics g, int x, int y, int width, int height) {
+            Graphics2D g2 = (Graphics2D) g.create();
+            g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+            g2.setColor(color);
+            g2.setStroke(new BasicStroke(thickness));
+            int r = height - 1;
+            g2.drawRoundRect(x + thickness / 2, y + thickness / 2, width - thickness, height - thickness, r, r);
+            g2.dispose();
+        }
+
+        @Override
+        public Insets getBorderInsets(Component c) {
+            return new Insets(thickness + 6, 20, thickness + 6, 20);
+        }
+
+        @Override
+        public boolean isBorderOpaque() {
+            return false;
+        }
     }
 
     private void updateDateFieldBorder(boolean focused) {
-        int thickness = focused ? 3 : 2;
-        dateField.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(focused ? currentTheme.secondary : currentTheme.primary, thickness),
-            BorderFactory.createEmptyBorder(10, 14, 10, 14)));
+        int thickness = focused ? 2 : 1;
+        Color color = focused ? currentTheme.secondary : new Color(255, 255, 255, 120);
+        dateField.setBorder(new PillBorder(color, thickness));
     }
 
     private void updateResultsPanelBorder() {
-        resultsPanel.setBorder(BorderFactory.createCompoundBorder(
-            BorderFactory.createLineBorder(currentTheme.primary.darker(), 1),
-            BorderFactory.createEmptyBorder(18, 18, 18, 18)));
+        resultsPanel.setBorder(BorderFactory.createEmptyBorder(18, 18, 18, 18));
     }
 
     private void showCalendarDialog() {
@@ -1631,26 +2919,16 @@ public class BirthCalculator extends JFrame {
 
     private void showCalendarDialog(JTextField targetField, String dialogTitle, Runnable afterPick) {
         LocalDate selectedDate = getDateFieldOrDefault(targetField);
-        JDialog dialog = new JDialog(this, dialogTitle, true);
-        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE);
-        dialog.getContentPane().setBackground(currentTheme.backgroundTop);
-        dialog.setLayout(new BorderLayout(12, 12));
-
+        
+        ModalOverlayPanel overlayPanel = new ModalOverlayPanel();
+        overlayPanel.setBounds(0, 0, getRootPane().getWidth(), getRootPane().getHeight());
+        
         JPanel contentPanel = new JPanel(new BorderLayout(12, 12)) {
             @Override
             protected void paintComponent(Graphics g) {
-                super.paintComponent(g);
-                Graphics2D g2 = (Graphics2D) g;
-                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
-                GradientPaint gradient = new GradientPaint(0, 0, currentTheme.backgroundTop,
-                    getWidth(), getHeight(), currentTheme.backgroundBottom);
-                g2.setPaint(gradient);
-                g2.fillRect(0, 0, getWidth(), getHeight());
-
-                g2.setColor(currentTheme.glow);
-                int[] bandX = {0, getWidth(), getWidth(), 0};
-                int[] bandY = {40, 0, 30, 80};
-                g2.fillPolygon(bandX, bandY, 4);
+                Graphics2D g2 = (Graphics2D) g.create();
+                paintLiquidGlass(g2, getWidth(), getHeight(), 28, false);
+                g2.dispose();
             }
         };
         contentPanel.setOpaque(false);
@@ -1667,46 +2945,128 @@ public class BirthCalculator extends JFrame {
         headerPanel.add(dialogTitleLabel, BorderLayout.NORTH);
         headerPanel.add(dialogHintLabel, BorderLayout.SOUTH);
 
-        JPanel controlsPanel = new JPanel(new GridBagLayout()) {
-            @Override
-            protected void paintComponent(Graphics g) {
-                // Subtle separator or background for controls if needed
-            }
-        };
+        JPanel controlsPanel = new JPanel(new GridBagLayout());
         controlsPanel.setOpaque(false);
         controlsPanel.setBorder(BorderFactory.createEmptyBorder(10, 0, 10, 0));
         GridBagConstraints controls = new GridBagConstraints();
         controls.insets = new Insets(0, 4, 0, 4);
 
-        GradientButton previousMonthButton = new GradientButton("<", currentTheme.primary, currentTheme.secondary);
-        previousMonthButton.setPreferredSize(new Dimension(40, 36));
-        GradientButton nextMonthButton = new GradientButton(">", currentTheme.primary, currentTheme.secondary);
-        nextMonthButton.setPreferredSize(new Dimension(40, 36));
+        GradientButton previousMonthButton = new GradientButton("◄", currentTheme.primary, currentTheme.secondary);
+        previousMonthButton.setPreferredSize(new Dimension(56, 36));
+        GradientButton nextMonthButton = new GradientButton("►", currentTheme.primary, currentTheme.secondary);
+        nextMonthButton.setPreferredSize(new Dimension(56, 36));
         
         JComboBox<String> monthCombo = new JComboBox<>(new String[] {
             "Leden", "Únor", "Březen", "Duben", "Květen", "Červen",
             "Červenec", "Srpen", "Září", "Říjen", "Listopad", "Prosinec"
-        });
+        }) {
+            @Override
+            public void paint(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(new Color(0, 0, 0, 45));
+                g2.fillRoundRect(0, 4, getWidth(), getHeight() - 2, getHeight(), getHeight());
+                g2.setColor(new Color(0, 0, 0, 40));
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), getHeight(), getHeight());
+                g2.dispose();
+                super.paint(g);
+            }
+        };
+        monthCombo.setOpaque(false);
+        monthCombo.setForeground(Color.WHITE);
+        monthCombo.setBorder(new PillBorder(new Color(255, 255, 255, 120), 1));
         monthCombo.setFont(FONT_BODY_BOLD);
-        monthCombo.setBackground(currentTheme.cardBackground);
-        monthCombo.setForeground(currentTheme.textMain);
-        monthCombo.setBorder(BorderFactory.createLineBorder(currentTheme.primary.darker(), 1));
-        ((JLabel)monthCombo.getRenderer()).setHorizontalAlignment(SwingConstants.CENTER);
+        monthCombo.setPreferredSize(new Dimension(140, 36)); // Prevent truncation of long month names
         monthCombo.setSelectedIndex(selectedDate.getMonthValue() - 1);
+        monthCombo.setUI(new javax.swing.plaf.basic.BasicComboBoxUI() {
+            @Override
+            protected JButton createArrowButton() {
+                JButton btn = new JButton("▼");
+                btn.setBorder(BorderFactory.createEmptyBorder(0, 4, 0, 10)); // Add padding to center it
+                btn.setContentAreaFilled(false);
+                btn.setForeground(currentTheme.primary.brighter()); // Make it brighter to pop
+                btn.setFocusPainted(false);
+                btn.setFont(FONT_BODY_BOLD);
+                return btn;
+            }
+        });
+        monthCombo.setRenderer(new DefaultListCellRenderer() {
+            @Override
+            public Component getListCellRendererComponent(JList<?> list, Object value, int index, boolean isSelected, boolean cellHasFocus) {
+                JLabel label = (JLabel) super.getListCellRendererComponent(list, value, index, isSelected, cellHasFocus);
+                label.setHorizontalAlignment(SwingConstants.CENTER);
+                
+                if (index == -1) {
+                    // Selected item inside the combo box (should be transparent)
+                    label.setOpaque(false);
+                    label.setBackground(new Color(0, 0, 0, 0));
+                    label.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 8)); // Match spinner padding
+                } else {
+                    // Items in the popup dropdown menu
+                    label.setOpaque(true);
+                    label.setBorder(BorderFactory.createEmptyBorder(4, 8, 4, 8));
+                    list.setBackground(currentTheme.backgroundTop);
+                    if (isSelected) {
+                        label.setBackground(currentTheme.secondary);
+                        label.setForeground(Color.WHITE);
+                    } else {
+                        label.setBackground(currentTheme.backgroundTop);
+                        label.setForeground(Color.WHITE);
+                    }
+                }
+                return label;
+            }
+        });
 
         JSpinner yearSpinner = new JSpinner(new SpinnerNumberModel(
-            selectedDate.getYear(), 1900, LocalDate.now().getYear(), 1));
-        yearSpinner.setBorder(BorderFactory.createLineBorder(currentTheme.primary.darker(), 1));
+            selectedDate.getYear(), 1900, LocalDate.now().getYear(), 1)) {
+            @Override
+            public void paint(Graphics g) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                g2.setRenderingHint(RenderingHints.KEY_ANTIALIASING, RenderingHints.VALUE_ANTIALIAS_ON);
+                g2.setColor(new Color(0, 0, 0, 45));
+                g2.fillRoundRect(0, 4, getWidth(), getHeight() - 2, getHeight(), getHeight());
+                g2.setColor(new Color(0, 0, 0, 40));
+                g2.fillRoundRect(0, 0, getWidth(), getHeight(), getHeight(), getHeight());
+                g2.dispose();
+                super.paint(g);
+            }
+        };
+        yearSpinner.setOpaque(false);
+        yearSpinner.setBorder(new PillBorder(new Color(255, 255, 255, 120), 1));
+        yearSpinner.setEditor(new JSpinner.NumberEditor(yearSpinner, "#")); // Remove grouping separators like commas
         JComponent editor = yearSpinner.getEditor();
+        editor.setOpaque(false);
         if (editor instanceof JSpinner.DefaultEditor) {
             JTextField tf = ((JSpinner.DefaultEditor)editor).getTextField();
-            tf.setBackground(currentTheme.cardBackground);
-            tf.setForeground(currentTheme.textMain);
-            tf.setCaretColor(currentTheme.primary);
+            tf.setOpaque(false);
+            tf.setBackground(new Color(0, 0, 0, 0)); // Ensure completely transparent background
+            tf.setForeground(Color.WHITE);
+            tf.setCaretColor(Color.WHITE);
             tf.setHorizontalAlignment(JTextField.CENTER);
+            tf.setBorder(BorderFactory.createEmptyBorder(0, 8, 0, 8)); // padding to replace the removed arrows
         }
         yearSpinner.setFont(FONT_BODY_BOLD);
-        yearSpinner.setPreferredSize(new Dimension(88, 32));
+        yearSpinner.setPreferredSize(new Dimension(100, 36)); // Increased dimension to show full year text (e.g. 2,009)
+
+        // Hide ugly default arrows
+        yearSpinner.setUI(new javax.swing.plaf.basic.BasicSpinnerUI() {
+            @Override
+            protected Component createNextButton() { return null; }
+            @Override
+            protected Component createPreviousButton() { return null; }
+        });
+
+        // Add slick mouse wheel scrolling for the year
+        yearSpinner.addMouseWheelListener(e -> {
+            int year = (Integer) yearSpinner.getValue();
+            if (e.getWheelRotation() < 0) {
+                year = Math.min(LocalDate.now().getYear(), year + 1);
+            } else {
+                year = Math.max(1900, year - 1);
+            }
+            yearSpinner.setValue(year);
+        });
 
         controls.gridx = 0;
         controlsPanel.add(previousMonthButton, controls);
@@ -1720,7 +3080,33 @@ public class BirthCalculator extends JFrame {
         JPanel daysPanel = new JPanel(new GridLayout(0, 7, 6, 6));
         daysPanel.setOpaque(false);
 
-        Runnable refreshCalendar = () -> updateCalendarDays(daysPanel, monthCombo, yearSpinner, dialog, targetField, selectedDate, afterPick);
+        Runnable closeAction = () -> {
+            javax.swing.Timer fadeOut = new javax.swing.Timer(16, null);
+            fadeOut.addActionListener(new ActionListener() {
+                long startTime = System.currentTimeMillis();
+                @Override
+                public void actionPerformed(ActionEvent e) {
+                    long elapsed = System.currentTimeMillis() - startTime;
+                    float progress = Math.min(1.0f, elapsed / 250f);
+                    float ease = (float)Math.pow(progress, 3); // ease-in cubic
+                    overlayPanel.setAlpha(1.0f - ease);
+                    overlayPanel.setYOffset((int)(20 * ease));
+                    
+                    int cx = (overlayPanel.getWidth() - contentPanel.getWidth()) / 2;
+                    int cy = (overlayPanel.getHeight() - contentPanel.getHeight()) / 2;
+                    contentPanel.setLocation(cx, cy + overlayPanel.yOffset);
+                    
+                    if (progress >= 1.0f) {
+                        ((javax.swing.Timer)e.getSource()).stop();
+                        getLayeredPane().remove(overlayPanel);
+                        getLayeredPane().repaint();
+                    }
+                }
+            });
+            fadeOut.start();
+        };
+
+        Runnable refreshCalendar = () -> updateCalendarDays(daysPanel, monthCombo, yearSpinner, closeAction, targetField, selectedDate, afterPick);
         monthCombo.addActionListener(e -> refreshCalendar.run());
         yearSpinner.addChangeListener(e -> refreshCalendar.run());
         previousMonthButton.addActionListener(e -> moveCalendarMonth(monthCombo, yearSpinner, -1));
@@ -1731,15 +3117,52 @@ public class BirthCalculator extends JFrame {
         topBlock.add(headerPanel, BorderLayout.NORTH);
         topBlock.add(controlsPanel, BorderLayout.SOUTH);
 
+        GradientButton closeButton = new GradientButton("Zavřít", currentTheme.accent, currentTheme.accent.brighter());
+        closeButton.setPreferredSize(new Dimension(100, 36));
+        closeButton.addActionListener(e -> closeAction.run());
+        
+        JPanel bottomPanel = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        bottomPanel.setOpaque(false);
+        bottomPanel.add(closeButton);
+
         contentPanel.add(topBlock, BorderLayout.NORTH);
         contentPanel.add(daysPanel, BorderLayout.CENTER);
-        dialog.add(contentPanel, BorderLayout.CENTER);
+        contentPanel.add(bottomPanel, BorderLayout.SOUTH);
 
         refreshCalendar.run();
-        dialog.pack();
-        dialog.setMinimumSize(new Dimension(520, 500));
-        dialog.setLocationRelativeTo(this);
-        dialog.setVisible(true);
+        contentPanel.setSize(new Dimension(520, 500));
+        
+        int cx = (overlayPanel.getWidth() - contentPanel.getWidth()) / 2;
+        int cy = (overlayPanel.getHeight() - contentPanel.getHeight()) / 2;
+        contentPanel.setLocation(cx, cy + 20); // Start lower
+        overlayPanel.add(contentPanel);
+
+        getLayeredPane().add(overlayPanel, JLayeredPane.MODAL_LAYER);
+        getLayeredPane().repaint();
+        overlayPanel.requestFocusInWindow();
+
+        javax.swing.Timer fadeIn = new javax.swing.Timer(16, null);
+        fadeIn.addActionListener(new ActionListener() {
+            long startTime = System.currentTimeMillis();
+            @Override
+            public void actionPerformed(ActionEvent e) {
+                long elapsed = System.currentTimeMillis() - startTime;
+                float progress = Math.min(1.0f, elapsed / 300f);
+                float ease = 1.0f - (float)Math.pow(1.0f - progress, 3); // ease-out cubic
+                
+                overlayPanel.setAlpha(ease);
+                overlayPanel.setYOffset(20 - (int)(20 * ease));
+                
+                int ncx = (overlayPanel.getWidth() - contentPanel.getWidth()) / 2;
+                int ncy = (overlayPanel.getHeight() - contentPanel.getHeight()) / 2;
+                contentPanel.setLocation(ncx, ncy + overlayPanel.yOffset);
+                
+                if (progress >= 1.0f) {
+                    ((javax.swing.Timer)e.getSource()).stop();
+                }
+            }
+        });
+        fadeIn.start();
     }
 
     private LocalDate getDateFieldOrDefault(JTextField targetField) {
@@ -1773,7 +3196,7 @@ public class BirthCalculator extends JFrame {
             JPanel daysPanel,
             JComboBox<String> monthCombo,
             JSpinner yearSpinner,
-            JDialog dialog,
+            Runnable closeAction,
             JTextField targetField,
             LocalDate selectedInField,
             Runnable afterPick) {
@@ -1813,7 +3236,7 @@ public class BirthCalculator extends JFrame {
             
             dayButton.addActionListener(e -> {
                 targetField.setText(date.format(DATE_FORMATTER));
-                dialog.dispose();
+                closeAction.run();
                 if (afterPick != null) {
                     afterPick.run();
                 }
@@ -1832,18 +3255,18 @@ public class BirthCalculator extends JFrame {
     private String getZodiacSign(LocalDate date) {
         int m = date.getMonthValue();
         int d = date.getDayOfMonth();
-        if (m == 1)  return d < 20 ? "♑ Kozoroh (Capricorn)" : "♒ Vodnář (Aquarius)";
-        if (m == 2)  return d < 19 ? "♒ Vodnář (Aquarius)" : "♓ Ryby (Pisces)";
-        if (m == 3)  return d < 21 ? "♓ Ryby (Pisces)" : "♈ Beran (Aries)";
-        if (m == 4)  return d < 20 ? "♈ Beran (Aries)" : "♉ Býk (Taurus)";
-        if (m == 5)  return d < 21 ? "♉ Býk (Taurus)" : "♊ Blíženci (Gemini)";
-        if (m == 6)  return d < 21 ? "♊ Blíženci (Gemini)" : "♋ Rak (Cancer)";
-        if (m == 7)  return d < 23 ? "♋ Rak (Cancer)" : "♌ Lev (Leo)";
-        if (m == 8)  return d < 23 ? "♌ Lev (Leo)" : "♍ Panna (Virgo)";
-        if (m == 9)  return d < 23 ? "♍ Panna (Virgo)" : "♎ Váhy (Libra)";
-        if (m == 10) return d < 23 ? "♎ Váhy (Libra)" : "♏ Štír (Scorpio)";
-        if (m == 11) return d < 22 ? "♏ Štír (Scorpio)" : "♐ Střelec (Sagittarius)";
-        if (m == 12) return d < 22 ? "♐ Střelec (Sagittarius)" : "♑ Kozoroh (Capricorn)";
+        if (m == 1)  return d < 20 ? "Kozoroh (Capricorn)" : "Vodnář (Aquarius)";
+        if (m == 2)  return d < 19 ? "Vodnář (Aquarius)" : "Ryby (Pisces)";
+        if (m == 3)  return d < 21 ? "Ryby (Pisces)" : "Beran (Aries)";
+        if (m == 4)  return d < 20 ? "Beran (Aries)" : "Býk (Taurus)";
+        if (m == 5)  return d < 21 ? "Býk (Taurus)" : "Blíženci (Gemini)";
+        if (m == 6)  return d < 21 ? "Blíženci (Gemini)" : "Rak (Cancer)";
+        if (m == 7)  return d < 23 ? "Rak (Cancer)" : "Lev (Leo)";
+        if (m == 8)  return d < 23 ? "Lev (Leo)" : "Panna (Virgo)";
+        if (m == 9)  return d < 23 ? "Panna (Virgo)" : "Váhy (Libra)";
+        if (m == 10) return d < 23 ? "Váhy (Libra)" : "Štír (Scorpio)";
+        if (m == 11) return d < 22 ? "Štír (Scorpio)" : "Střelec (Sagittarius)";
+        if (m == 12) return d < 22 ? "Střelec (Sagittarius)" : "Kozoroh (Capricorn)";
         return "";
     }
 
@@ -1893,28 +3316,12 @@ public class BirthCalculator extends JFrame {
     }
 
     private void setEmptyResults() {
-        resultsArea.setText(String.format(
-            "<html><body style='%s'>" +
-            "<div style='padding: 28px 30px;'>" +
-            "<div style='font-size: 24px; font-weight: 700; color: %s;'>Čekám na datum narození</div>" +
-            "<div style='margin-top: 10px; font-size: 13px; color: %s; line-height: 1.5;'>" +
-            "Zadejte datum ve formátu <b>dd.mm.yyyy</b> a výsledek se zobrazí jako přehledný moderní panel." +
-            "</div>" +
-            "<div style='margin-top: 22px; padding: 16px; background: %s; color: %s; border: 1px solid %s;'>" +
-            "Tip: můžete použít například <b>15.03.2000</b>." +
-            "</div>" +
-            "</div></body></html>",
-            bodyStyle(),
-            hex(currentTheme.textMain),
-            hex(currentTheme.textMuted),
-            hex(currentTheme.cardBackground),
-            hex(currentTheme.textMuted),
-            hex(currentTheme.primary.darker())
-        ));
-        resultsArea.setCaretPosition(0);
+        if (resultsLayout != null && resultsContentPanel != null) {
+            resultsLayout.show(resultsContentPanel, "EMPTY");
+        }
     }
 
-    private void renderResults(LocalDate birthDate, boolean resetScroll) {
+    private void renderResults(LocalDate birthDate, boolean resetScroll, boolean isTimerUpdate) {
         LocalDateTime now = LocalDateTime.now();
         LocalDate today = LocalDate.now();
 
@@ -1930,72 +3337,94 @@ public class BirthCalculator extends JFrame {
             ? "Dnes"
             : String.format("Za %,d dní", daysUntilBirthday);
 
-        String html = String.format(
-            "<html><body style='%s'>" +
-            "<div style='padding: 22px 24px 28px 24px;'>" +
-            "<table width='100%%' cellpadding='0' cellspacing='0'>" +
-            "<tr>" +
-            "<td bgcolor='%s' style='padding: 18px; color: #ffffff;'>" +
-            "<div style='font-size: 12px; letter-spacing: 1px;'>VĚK DNES</div>" +
-            "<div style='font-size: 38px; font-weight: 800; margin-top: 6px;'>%d let</div>" +
-            "<div style='font-size: 15px; margin-top: 4px;'>%d měsíců a %d dní</div>" +
-            "</td>" +
-            "</tr>" +
-            "</table>" +
-            "<table width='100%%' cellpadding='0' cellspacing='10'>" +
-            "%s%s" +
-            "</table>" +
-            "<div style='margin-top: 8px; font-size: 16px; font-weight: 700; color: %s;'>Narozeniny</div>" +
-            "<table width='100%%' cellpadding='0' cellspacing='10'>" +
-            "%s" +
-            "</table>" +
-            "<div style='margin-top: 8px; font-size: 16px; font-weight: 700; color: %s;'>Celkový čas</div>" +
-            "<table width='100%%' cellpadding='0' cellspacing='10'>" +
-            "%s%s" +
-            "</table>" +
-            "<div style='margin: 4px 10px 0 10px; font-size: 11px; color: %s;'>Živě podle systémového času: %s</div>" +
-            "</div></body></html>",
-            bodyStyle(),
-            gradientFallback(),
-            age.getYears(), age.getMonths(), age.getDays(),
-            metricRow("Datum narození", birthDate.format(DATE_FORMATTER), 
-                "Znamení zvěrokruhu", getZodiacSign(birthDate)),
-            metricRow("Dnešní datum", today.format(DATE_FORMATTER), 
-                "Měsíců celkem", String.format("%,d", months)),
-            hex(currentTheme.textMain),
-            metricRow("Příští narozeniny", nextBirthday.format(DATE_FORMATTER), "Odpočet", birthdayText),
-            hex(currentTheme.textMain),
-            metricRow("Dní", String.format("%,d", days), "Hodin", String.format("%,d", hours)),
-            metricRow("Minut", String.format("%,d", minutes), "Sekund", String.format("%,d", seconds)),
-            hex(currentTheme.textMuted),
-            now.format(TIME_FORMATTER)
-        );
+        if (headerCard != null) {
+            headerCard.setAge(age.getYears(), age.getMonths(), age.getDays());
+        }
+        if (cardBirthDate != null) {
+            cardBirthDate.setValue(birthDate.format(DATE_FORMATTER));
+        }
+        if (cardZodiac != null) {
+            cardZodiac.setValue(getZodiacSign(birthDate));
+        }
+        if (cardTodayDate != null) {
+            cardTodayDate.setValue(today.format(DATE_FORMATTER));
+        }
+        if (cardMonthsTotal != null) {
+            cardMonthsTotal.setValue(String.format("%,d", months));
+        }
+        if (cardNextBirthday != null) {
+            cardNextBirthday.setValue(nextBirthday.format(DATE_FORMATTER));
+        }
+        if (cardCountdown != null) {
+            cardCountdown.setValue(birthdayText);
+        }
+        if (cardDaysTotal != null) {
+            cardDaysTotal.setValue(String.format("%,d", days));
+        }
+        if (cardHoursTotal != null) {
+            cardHoursTotal.setValue(String.format("%,d", hours));
+        }
+        if (cardMinutesTotal != null) {
+            cardMinutesTotal.setValue(String.format("%,d", minutes));
+        }
+        if (cardSecondsTotal != null) {
+            cardSecondsTotal.setValue(String.format("%,d", seconds));
+        }
+        if (liveTimeLabel != null) {
+            liveTimeLabel.setText("Živě podle systémového času: " + now.format(TIME_FORMATTER));
+        }
 
-        int previousScroll = resultsScrollPane == null ? 0 : resultsScrollPane.getVerticalScrollBar().getValue();
-        resultsArea.setText(html);
-        if (resetScroll) {
-            resultsArea.setCaretPosition(0);
-        } else if (resultsScrollPane != null) {
-            SwingUtilities.invokeLater(() -> resultsScrollPane.getVerticalScrollBar().setValue(previousScroll));
+        if (resultsLayout != null && resultsContentPanel != null) {
+            resultsLayout.show(resultsContentPanel, "DASHBOARD");
+        }
+
+        if (!isTimerUpdate) {
+            int delay = 0;
+            if (headerCard != null) { headerCard.triggerEntryAnimation(delay); delay += 35; }
+            if (cardBirthDate != null) { cardBirthDate.triggerEntryAnimation(delay); delay += 35; }
+            if (cardZodiac != null) { cardZodiac.triggerEntryAnimation(delay); delay += 35; }
+            if (cardTodayDate != null) { cardTodayDate.triggerEntryAnimation(delay); delay += 35; }
+            if (cardMonthsTotal != null) { cardMonthsTotal.triggerEntryAnimation(delay); delay += 35; }
+            if (cardNextBirthday != null) { cardNextBirthday.triggerEntryAnimation(delay); delay += 35; }
+            if (cardCountdown != null) { cardCountdown.triggerEntryAnimation(delay); delay += 35; }
+            if (cardDaysTotal != null) { cardDaysTotal.triggerEntryAnimation(delay); delay += 35; }
+            if (cardHoursTotal != null) { cardHoursTotal.triggerEntryAnimation(delay); delay += 35; }
+            if (cardMinutesTotal != null) { cardMinutesTotal.triggerEntryAnimation(delay); delay += 35; }
+            if (cardSecondsTotal != null) { cardSecondsTotal.triggerEntryAnimation(delay); }
+            
+            long totalDuration = delay + 400;
+            long animStart = System.currentTimeMillis();
+            javax.swing.Timer masterTimer = new javax.swing.Timer(16, e -> {
+                if (resultsContentPanel != null) {
+                    resultsContentPanel.repaint();
+                }
+                if (System.currentTimeMillis() - animStart > totalDuration + 50) {
+                    ((javax.swing.Timer)e.getSource()).stop();
+                }
+            });
+            masterTimer.start();
         }
     }
 
-    private String metricRow(String firstLabel, String firstValue, String secondLabel, String secondValue) {
+    private String metricRow(String firstLabel, String firstValue, String firstId,
+                             String secondLabel, String secondValue, String secondId) {
         return String.format("<tr>%s%s</tr>",
-            metricCell(firstLabel, firstValue),
-            metricCell(secondLabel, secondValue));
+            metricCell(firstLabel, firstValue, firstId),
+            metricCell(secondLabel, secondValue, secondId));
     }
 
-    private String metricCell(String label, String value) {
+    private String metricCell(String label, String value, String valueId) {
+        String idAttr = (valueId != null) ? String.format(" id='%s'", valueId) : "";
         return String.format(
             "<td width='50%%' bgcolor='%s' style='padding: 13px 15px; border: 1px solid %s;'>" +
             "<div style='font-size: 11px; color: %s;'>%s</div>" +
-            "<div style='margin-top: 5px; font-size: 19px; font-weight: 700; color: %s;'>%s</div>" +
+            "<div%s style='margin-top: 5px; font-size: 19px; font-weight: 700; color: %s;'>%s</div>" +
             "</td>",
             hex(currentTheme.inputBackground),
             hex(currentTheme.primary.darker()),
             hex(currentTheme.textMuted),
             label,
+            idAttr,
             hex(currentTheme.textMain),
             value
         );
@@ -2005,7 +3434,7 @@ public class BirthCalculator extends JFrame {
         return String.format(
             "margin: 0; font-family: %s, sans-serif; background: %s; color: %s;",
             UI_FONT,
-            hex(currentTheme.inputBackground),
+            hex(currentTheme.cardBackground),
             hex(currentTheme.textMain)
         );
     }
@@ -2025,6 +3454,12 @@ public class BirthCalculator extends JFrame {
     private static String hex(Color color) {
         return String.format("#%02x%02x%02x", color.getRed(), color.getGreen(), color.getBlue());
     }
+
+    private void enableSmoothScrolling(JScrollPane scrollPane) {
+        JScrollBar verticalBar = scrollPane.getVerticalScrollBar();
+        verticalBar.setUnitIncrement(24);
+        verticalBar.setBlockIncrement(120);
+    }
     
     private void calculateAge() {
         String dateStr = dateField.getText().trim();
@@ -2041,7 +3476,7 @@ public class BirthCalculator extends JFrame {
         if (birthDate == null) return;
 
         lastBirthDate = birthDate;
-        renderResults(birthDate, true);
+        renderResults(birthDate, true, false);
         addDateToHistory(birthDate);
     }
     
@@ -2056,6 +3491,9 @@ public class BirthCalculator extends JFrame {
         System.setProperty("sun.awt.X11.XWMClass", "BirthCalculator");
         System.setProperty("awt.useSystemAAFontSettings", "on");
         System.setProperty("swing.aatext", "true");
+        System.setProperty("sun.java2d.opengl", "true");
+        System.setProperty("sun.java2d.d3d", "true");
+        System.setProperty("sun.java2d.noddraw", "true");
 
         try {
             UIManager.setLookAndFeel(UIManager.getSystemLookAndFeelClassName());

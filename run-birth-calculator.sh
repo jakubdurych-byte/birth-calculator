@@ -8,8 +8,10 @@ cd "$(dirname "$0")"
 export _JAVA_AWT_WM_NONREPARENTING=1
 export GDK_BACKEND=x11
 
-javac BirthCalculator.java
+mkdir -p out
+javac -d out BirthCalculator.java
 exec java \
+  -cp out \
   -Dsun.awt.X11.XWMClass=BirthCalculator \
   -Dawt.useSystemAAFontSettings=on \
   -Dswing.aatext=true \
